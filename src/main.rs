@@ -158,7 +158,7 @@ fn find_manifest<P>(dir: P) -> Result<Manifest, FindManifestError> where P: AsRe
 
 /// Get the path to the file we want to take the documentation from.
 fn get_entry_point(manifest: &Manifest) -> Option<PathBuf> {
-  match get_lib_path(&manifest.toml) {
+  match get_entry_point_from_manifest(&manifest.toml) {
     Some(ep) => Some(ep.into()),
     None => {
       // we need to guess whether it’s a lib or a binary crate
@@ -179,8 +179,8 @@ fn get_entry_point(manifest: &Manifest) -> Option<PathBuf> {
   }
 }
 
-fn get_lib_path(toml: &Value) -> Option<String> {
-  toml.get("lib")?.get("path")?.as_str().map(|s| s.to_owned())
+fn get_entry_point_from_manifest(toml: &Value) -> Option<String> {
+  toml.get("lib").or(toml.get("bin"))?.get("path")?.as_str().map(|s| s.to_owned())
 }
 
 /// Open a file and get its main inner documentation (//!).
