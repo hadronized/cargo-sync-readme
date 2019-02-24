@@ -180,7 +180,10 @@ fn get_entry_point(manifest: &Manifest) -> Option<PathBuf> {
 }
 
 fn get_entry_point_from_manifest(toml: &Value) -> Option<String> {
-  toml.get("lib").or(toml.get("bin"))?.get("path")?.as_str().map(|s| s.to_owned())
+  toml.get("lib").or(toml.get("bin"))
+    .and_then(|v| v.get("path"))
+    .and_then(Value::as_str)
+    .map(|s| s.to_owned())
 }
 
 /// Open a file and get its main inner documentation (//!).
