@@ -1,0 +1,16 @@
+[package]
+name = "cargo-sync-readme"
+version = "0.1.0"
+license = "BSD-3-Clause"
+authors = ["Dimitri Sabadie <dimitri.sabadie@gmail.com>"]
+description = "Generate a Markdown section in your README based on your Rust documentation"
+keywords = ["cargo", "readme", "documentation"]
+categories = ["development-tools::cargo-plugins"]
+homepage = "https://github.com/phaazon/cargo-sync-readme"
+repository = "https://github.com/phaazon/cargo-sync-readme"
+documentation = "https://docs.rs/cargo-sync-readme"
+readme = "README.md"
+edition = "2018"
+
+[dependencies]
+toml = "0.4"
