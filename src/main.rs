@@ -93,11 +93,17 @@ fn main() {
         if let Some(entry_point) = entry_point {
           let doc = extract_inner_doc(entry_point);
           let readme_path = get_readme(manifest);
-          let new_readme = transform_readme(&readme_path, doc);
-          let mut file = File::create(readme_path).unwrap();
-          let _ = file.write_all(new_readme.as_bytes());
+
+          match transform_readme(&readme_path, doc) {
+            Ok(new_readme) => {
+              let mut file = File::create(readme_path).unwrap();
+              let _ = file.write_all(new_readme.as_bytes());
+            }
+
+            Err(e) => eprintln!("{}", e)
+          }
         } else {
-          eprintln!("cannot find entrypoint");
+          eprintln!("Cannot find entrypoint (default to src/lib.rs or src/main.rs).");
           process::exit(1);
         }
       }
@@ -108,7 +114,7 @@ fn main() {
       }
     }
   } else {
-    eprintln!("it seems like you’re running this command from nowhere good…");
+    eprintln!("It seems like you’re running this command from nowhere good…");
     process::exit(1);
   }
 }
@@ -124,10 +130,10 @@ enum FindManifestError {
 impl fmt::Display for FindManifestError {
   fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
     match *self {
-      FindManifestError::CannotFindManifest => f.write_str("cannot find manifest"),
+      FindManifestError::CannotFindManifest => f.write_str("Cannot find manifest (Cargo.toml)."),
       FindManifestError::CannotOpenManifest(ref path) =>
-        write!(f, "cannot open manifest at path {}", path.display()),
-      FindManifestError::TomlError(ref e) => write!(f, "TOML error: {}", e)
+        write!(f, "Cannot open manifest at path {}.", path.display()),
+      FindManifestError::TomlError(ref e) => write!(f, "TOML error: {}.", e)
     }
   }
 }
@@ -233,11 +239,26 @@ fn get_readme(manifest: &Manifest) -> PathBuf {
   manifest.parent_dir.join(readme)
 }
 
+#[derive(Debug)]
+enum TransformError {
+  CannotReadReadme(PathBuf),
+  MissingOrIllFormadMarkers
+}
+
+impl fmt::Display for TransformError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    match *self {
+      TransformError::CannotReadReadme(ref path) => write!(f, "Cannot read README at {}.", path.display()),
+      TransformError::MissingOrIllFormadMarkers => f.write_str("Markers not found or ill-formed; check your file again."),
+    }
+  }
+}
+
 /// Read a readme file and return its content with the documentation injected, if any.
-fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>, S: AsRef<str> {
+fn transform_readme<P, S>(path: P, new_readme: S) -> Result<String, TransformError> where P: AsRef<Path>, S: AsRef<str> {
   let path = path.as_ref();
   let new_readme = new_readme.as_ref();
-  let mut file = File::open(path).unwrap();
+  let mut file = File::open(path).map_err(|_| TransformError::CannotReadReadme(path.to_owned()))?;
   let mut content = String::new();
 
   let _ = file.read_to_string(&mut content);
@@ -247,7 +268,7 @@ fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>
     let first_part = &content[0 .. marker_offset];
     let second_part = &content[marker_offset + MARKER.len() ..];
 
-    format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
+    Ok(format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part))
   } else {
     // try to look for the start and end markers (already used the tool)
     let marker_start_offset = content.find(MARKER_START);
@@ -258,10 +279,10 @@ fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>
         let first_part = &content[0 .. start];
         let second_part = &content[end + MARKER_END.len() ..];
 
-        format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
+        Ok(format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part))
       },
 
-      _ => content
+      _ => Err(TransformError::MissingOrIllFormadMarkers)
     }
   }
 }
