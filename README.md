@@ -57,7 +57,7 @@ This will effectively update your *readme* file with the main documentation from
 
 ## Q/A and troubleshooting
 
-### Are worskpace crates supported?
+### Are workspace crates supported?
 
 Not yet! If you have ideas how the tool should behave with them, please contribute with an issue or
 a PR!
