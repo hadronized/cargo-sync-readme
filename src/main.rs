@@ -76,11 +76,14 @@ const MARKER_START: &str = "<!-- cargo-sync-readme start -->\n";
 const MARKER_END: &str = "<!-- cargo-sync-readme end -->\n";
 
 #[derive(Debug, StructOpt)]
-#[structopt(
-  name = "cargo-sync-readme",
-  about = "Generate a Markdown section in your README based on your Rust documentation.",
-)]
-struct CLIOpt {}
+#[structopt(name = "cargo-sync-readme")]
+enum CLIOpt {
+  #[structopt(
+    name = "sync-readme",
+    about = "Generate a Markdown section in your README based on your Rust documentation.",
+  )]
+  SyncReadme
+}
 
 fn main() {
   let _cli_opt = CLIOpt::from_args();
