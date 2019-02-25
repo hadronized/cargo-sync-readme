@@ -13,4 +13,5 @@ readme = "README.md"
 edition = "2018"
 
 [dependencies]
+structopt = "0.2"
 toml = "0.4"

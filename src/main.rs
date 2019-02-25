@@ -63,8 +63,10 @@
 use std::env::current_dir;
 use std::fmt;
 use std::fs::{File, read_dir};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process;
+use structopt::StructOpt;
 use toml::Value;
 use toml::de::Error as TomlError;
 
@@ -73,27 +75,41 @@ const MARKER: &str = "<!-- cargo-sync-readme -->\n";
 const MARKER_START: &str = "<!-- cargo-sync-readme start -->\n";
 const MARKER_END: &str = "<!-- cargo-sync-readme end -->\n";
 
+#[derive(Debug, StructOpt)]
+#[structopt(
+  name = "cargo-sync-readme",
+  about = "Generate a Markdown section in your README based on your Rust documentation.",
+)]
+struct CLIOpt {}
+
 fn main() {
+  let _cli_opt = CLIOpt::from_args();
+
   if let Ok(pwd) = current_dir() {
     match find_manifest(pwd) {
       Ok(ref manifest) => {
         let entry_point = get_entry_point(manifest);
-        println!("synchronizing from: {:?}", entry_point);
 
         if let Some(entry_point) = entry_point {
           let doc = extract_inner_doc(entry_point);
           let readme_path = get_readme(manifest);
-          let new_readme = transform_readme(readme_path, doc);
-          print!("new content is:\n{}", new_readme);
+          let new_readme = transform_readme(&readme_path, doc);
+          let mut file = File::create(readme_path).unwrap();
+          let _ = file.write_all(new_readme.as_bytes());
         } else {
           eprintln!("cannot find entrypoint");
+          process::exit(1);
         }
       }
 
-      Err(e) => eprintln!("{}", e)
+      Err(e) => {
+        eprintln!("{}", e);
+        process::exit(1);
+      }
     }
   } else {
     eprintln!("it seems like you’re running this command from nowhere good…");
+    process::exit(1);
   }
 }
 
@@ -224,7 +240,7 @@ fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>
   let mut file = File::open(path).unwrap();
   let mut content = String::new();
 
-  file.read_to_string(&mut content);
+  let _ = file.read_to_string(&mut content);
 
   if let Some(marker_offset) = content.find(MARKER) {
     // try to look for the sync marker (first time using the tool)
@@ -242,7 +258,7 @@ fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>
         let first_part = &content[0 .. start];
         let second_part = &content[end + MARKER_END.len() ..];
 
-        format!("{}\n{}\n{}\n{}\n{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
+        format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
       },
 
       _ => content
