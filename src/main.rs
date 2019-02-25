@@ -68,6 +68,11 @@ use std::path::{Path, PathBuf};
 use toml::Value;
 use toml::de::Error as TomlError;
 
+const MANIFEST_NAME: &str = "Cargo.toml";
+const MARKER: &str = "<!-- cargo-sync-readme -->\n";
+const MARKER_START: &str = "<!-- cargo-sync-readme start -->\n";
+const MARKER_END: &str = "<!-- cargo-sync-readme end -->\n";
+
 fn main() {
   if let Ok(pwd) = current_dir() {
     match find_manifest(pwd) {
@@ -77,7 +82,9 @@ fn main() {
 
         if let Some(entry_point) = entry_point {
           let doc = extract_inner_doc(entry_point);
-          println!("documentation:\n{}", doc);
+          let readme_path = get_readme(manifest);
+          let new_readme = transform_readme(readme_path, doc);
+          print!("new content is:\n{}", new_readme);
         } else {
           eprintln!("cannot find entrypoint");
         }
@@ -90,7 +97,6 @@ fn main() {
   }
 }
 
-const MANIFEST_NAME: &str = "Cargo.toml";
 
 #[derive(Debug)]
 enum FindManifestError {
@@ -198,4 +204,48 @@ fn extract_inner_doc<P>(path: P) -> String where P: AsRef<Path> {
     .take_while(|l| l.starts_with("//!"))
     .map(|l| format!("{}\n", l.trim_start_matches("//!").trim_start()))
     .collect()
+}
+
+/// Extract the path to the readme file from the manifest.
+fn get_readme(manifest: &Manifest) -> PathBuf {
+  let readme = manifest.toml
+    .get("package")
+    .and_then(|p| p.get("readme"))
+    .and_then(Value::as_str)
+    //.map(|s| s.to_owned())
+    .unwrap_or("README.md");
+  manifest.parent_dir.join(readme)
+}
+
+/// Read a readme file and return its content with the documentation injected, if any.
+fn transform_readme<P, S>(path: P, new_readme: S) -> String where P: AsRef<Path>, S: AsRef<str> {
+  let path = path.as_ref();
+  let new_readme = new_readme.as_ref();
+  let mut file = File::open(path).unwrap();
+  let mut content = String::new();
+
+  file.read_to_string(&mut content);
+
+  if let Some(marker_offset) = content.find(MARKER) {
+    // try to look for the sync marker (first time using the tool)
+    let first_part = &content[0 .. marker_offset];
+    let second_part = &content[marker_offset + MARKER.len() ..];
+
+    format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
+  } else {
+    // try to look for the start and end markers (already used the tool)
+    let marker_start_offset = content.find(MARKER_START);
+    let marker_end_offset = content.find(MARKER_END);
+
+    match (marker_start_offset, marker_end_offset) {
+      (Some(start), Some(end)) => {
+        let first_part = &content[0 .. start];
+        let second_part = &content[end + MARKER_END.len() ..];
+
+        format!("{}\n{}\n{}\n{}\n{}", first_part, MARKER_START, new_readme, MARKER_END, second_part)
+      },
+
+      _ => content
+    }
+  }
 }
