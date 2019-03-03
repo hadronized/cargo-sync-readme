@@ -227,7 +227,7 @@ fn extract_inner_doc<P>(path: P) -> String where P: AsRef<Path> {
   content.lines()
     .skip_while(|l| !l.starts_with("//!"))
     .take_while(|l| l.starts_with("//!"))
-    .map(|l| format!("{}\n", l.trim_start_matches("//!").trim_start()))
+    .map(|l| format!("{}\n", l.trim_start_matches("//!")))
     .collect()
 }
 
