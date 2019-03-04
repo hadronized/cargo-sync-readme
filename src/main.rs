@@ -224,10 +224,24 @@ fn extract_inner_doc<P>(path: P) -> String where P: AsRef<Path> {
 
   let _ = file.read_to_string(&mut content);
 
-  content.lines()
+  let lines: Vec<_> = content
+    .lines()
     .skip_while(|l| !l.starts_with("//!"))
     .take_while(|l| l.starts_with("//!"))
     .map(|l| format!("{}\n", l.trim_start_matches("//!")))
+    .collect();
+
+  // find the minimal offset of all lines for which the first character is not a space
+  let offset = lines
+    .iter()
+    .flat_map(|line| line.find(|c: char| !c.is_whitespace()))
+    .min()
+    .unwrap_or(0);
+
+  // trim by the given offset to remove the introduced space by the Rust doc
+  lines
+    .iter()
+    .map(|line| if line == "\n" { line } else { &line[offset..] })
     .collect()
 }
 
