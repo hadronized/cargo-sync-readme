@@ -82,11 +82,23 @@ enum CLIOpt {
     name = "sync-readme",
     about = "Generate a Markdown section in your README based on your Rust documentation.",
   )]
-  SyncReadme
+  SyncReadme {
+    #[structopt(
+      short = "z",
+      long = "strip-hidden-doc",
+    )]
+    strip_hidden_doc: bool
+  }
 }
 
 fn main() {
-  let _cli_opt = CLIOpt::from_args();
+  let cli_opt = CLIOpt::from_args();
+
+  let CLIOpt::SyncReadme { strip_hidden_doc } = cli_opt;
+
+  if strip_hidden_doc {
+    println!("stripping hidden documentation");
+  }
 
   if let Ok(pwd) = current_dir() {
     match find_manifest(pwd) {
