@@ -381,3 +381,23 @@ fn strip_hidden_doc_tests(st: &mut CodeBlockState, line: &str) -> bool {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn strip_dash_starting_lines() {
+    let mut st = CodeBlockState::None;
+
+    assert_eq!(strip_hidden_doc_tests(&mut st, "# okay"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "```"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "foo bar zoo"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "# hello"), false);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "#"), false);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "#### nope"), false);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "~~~"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "```"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "# still okay"), true);
+  }
+}
