@@ -77,7 +77,7 @@ const MARKER_END: &str = "<!-- cargo-sync-readme end -->\n";
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "cargo-sync-readme")]
-enum CLIOpt {
+enum CliOpt {
   #[structopt(
     name = "sync-readme",
     about = "Generate a Markdown section in your README based on your Rust documentation.",
@@ -91,14 +91,19 @@ enum CLIOpt {
   }
 }
 
+/// Common Markdown code-block state.
+///
+/// This type helps track which state we are currently in when parsing code-blocks. It can either
+/// be none or a code-block with either backticks (`) or tildes (~).
+#[derive(Debug)]
+enum CodeBlockState {
+  None,
+  InWithBackticks,
+  InWithTildes
+}
+
 fn main() {
-  let cli_opt = CLIOpt::from_args();
-
-  let CLIOpt::SyncReadme { strip_hidden_doc } = cli_opt;
-
-  if strip_hidden_doc {
-    println!("stripping hidden documentation");
-  }
+  let cli_opt = CliOpt::from_args();
 
   if let Ok(pwd) = current_dir() {
     match find_manifest(pwd) {
@@ -106,7 +111,7 @@ fn main() {
         let entry_point = get_entry_point(manifest);
 
         if let Some(entry_point) = entry_point {
-          let doc = extract_inner_doc(entry_point);
+          let doc = extract_inner_doc(entry_point, &cli_opt);
           let readme_path = get_readme(manifest);
 
           match transform_readme(&readme_path, doc) {
@@ -230,9 +235,11 @@ fn get_entry_point_from_manifest(toml: &Value) -> Option<String> {
 }
 
 /// Open a file and get its main inner documentation (//!).
-fn extract_inner_doc<P>(path: P) -> String where P: AsRef<Path> {
+fn extract_inner_doc<P>(path: P, opt: &CliOpt) -> String where P: AsRef<Path> {
+  let CliOpt::SyncReadme { strip_hidden_doc } = *opt;
   let mut file = File::open(path.as_ref()).unwrap();
   let mut content = String::new();
+  let mut codeblock_st = CodeBlockState::None;
 
   let _ = file.read_to_string(&mut content);
 
@@ -254,6 +261,13 @@ fn extract_inner_doc<P>(path: P) -> String where P: AsRef<Path> {
   lines
     .iter()
     .map(|line| if line == "\n" { line } else { &line[offset..] })
+    .filter(|l| {
+      if strip_hidden_doc {
+        strip_hidden_doc_tests(&mut codeblock_st, l)
+      } else {
+        true
+      }
+    })
     .collect()
 }
 
@@ -284,7 +298,14 @@ impl fmt::Display for TransformError {
 }
 
 /// Read a readme file and return its content with the documentation injected, if any.
-fn transform_readme<P, S>(path: P, new_readme: S) -> Result<String, TransformError> where P: AsRef<Path>, S: AsRef<str> {
+///
+/// Perform any required other transformations if asked by the user.
+fn transform_readme<P, S>(
+  path: P,
+  new_readme: S,
+) -> Result<String, TransformError>
+where P: AsRef<Path>,
+      S: AsRef<str> {
   let path = path.as_ref();
   let new_readme = new_readme.as_ref();
   let mut file = File::open(path).map_err(|_| TransformError::CannotReadReadme(path.to_owned()))?;
@@ -312,6 +333,51 @@ fn transform_readme<P, S>(path: P, new_readme: S) -> Result<String, TransformErr
       },
 
       _ => Err(TransformError::MissingOrIllFormadMarkers)
+    }
+  }
+}
+
+/// Strip hidden documentation tests from a readme.
+fn strip_hidden_doc_tests(st: &mut CodeBlockState, line: &str) -> bool {
+  match st {
+    CodeBlockState::None => {
+      // if we’re not currently in a code-block, check if we need to open one; in all cases,
+      // we don’t want to filter that line out
+      if line.starts_with("~~~") {
+        *st = CodeBlockState::InWithTildes;
+      } else if line.starts_with("```") {
+        *st = CodeBlockState::InWithBackticks;
+      }
+
+      true
+    }
+
+    CodeBlockState::InWithTildes => {
+      // we’re in a code-block, so filter only lines starting with a dash (#) and let others
+      // go through; close the code-block if we find three tildes (~~~)
+      if line.starts_with("#") {
+        false
+      } else {
+        if line.starts_with("~~~") {
+          *st = CodeBlockState::None;
+        }
+
+        true
+      }
+    }
+
+    CodeBlockState::InWithBackticks => {
+      // we’re in a code-block, so filter only lines starting with a dash (#) and let others
+      // go through; close the code-block if we find three backticks (```)
+      if line.starts_with("#") {
+        false
+      } else {
+        if line.starts_with("```") {
+          *st = CodeBlockState::None;
+        }
+
+        true
+      }
     }
   }
 }
