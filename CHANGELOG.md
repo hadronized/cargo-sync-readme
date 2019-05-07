@@ -1,3 +1,10 @@
+## 0.1.4
+
+> Tue May 7th 2019
+
+  - Fix a bug with the dash (ignore doc test with `-z`) that would prevent `#![…]` for instance to
+    be copied.
+
 ## 0.1.3
 
 > Thu May 2nd 2019
