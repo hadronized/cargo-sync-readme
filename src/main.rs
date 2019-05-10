@@ -71,9 +71,9 @@ use toml::Value;
 use toml::de::Error as TomlError;
 
 const MANIFEST_NAME: &str = "Cargo.toml";
-const MARKER: &str = "<!-- cargo-sync-readme -->\n";
-const MARKER_START: &str = "<!-- cargo-sync-readme start -->\n";
-const MARKER_END: &str = "<!-- cargo-sync-readme end -->\n";
+const MARKER: &str = "<!-- cargo-sync-readme -->";
+const MARKER_START: &str = "<!-- cargo-sync-readme start -->";
+const MARKER_END: &str = "<!-- cargo-sync-readme end -->";
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "cargo-sync-readme")]
@@ -318,7 +318,7 @@ where P: AsRef<Path>,
     let first_part = &content[0 .. marker_offset];
     let second_part = &content[marker_offset + MARKER.len() ..];
 
-    Ok(format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part))
+    Ok(reformat_with_markers(first_part, new_readme, second_part))
   } else {
     // try to look for the start and end markers (already used the tool)
     let marker_start_offset = content.find(MARKER_START);
@@ -329,12 +329,17 @@ where P: AsRef<Path>,
         let first_part = &content[0 .. start];
         let second_part = &content[end + MARKER_END.len() ..];
 
-        Ok(format!("{}{}\n{}\n{}{}", first_part, MARKER_START, new_readme, MARKER_END, second_part))
+        Ok(reformat_with_markers(first_part, new_readme, second_part))
       },
 
       _ => Err(TransformError::MissingOrIllFormadMarkers)
     }
   }
+}
+
+// Reformat the README by inserting the documentation between the start and end markers.
+fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str) -> String {
+  format!("{}{}\n\n{}\n{}\n{}", first_part, MARKER_START, doc, MARKER_END, second_part)
 }
 
 /// Strip hidden documentation tests from a readme.
