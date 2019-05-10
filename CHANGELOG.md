@@ -1,3 +1,9 @@
+## 0.1.5
+
+> Thu May 10th 2019
+
+  - Change the handling of newlines and internal algorithms to look for markers.
+
 ## 0.1.4
 
 > Tue May 7th 2019
