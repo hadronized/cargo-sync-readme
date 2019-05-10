@@ -13,5 +13,6 @@ readme = "README.md"
 edition = "2018"
 
 [dependencies]
+regex = "1.1"
 structopt = "0.2"
 toml = "0.4"
