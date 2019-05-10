@@ -60,6 +60,7 @@
 //! Not yet! If you have ideas how the tool should behave with them, please contribute with an issue or
 //! a PR!
 
+use regex::RegexBuilder;
 use std::env::current_dir;
 use std::fmt;
 use std::fs::{File, read_dir};
@@ -70,10 +71,13 @@ use structopt::StructOpt;
 use toml::Value;
 use toml::de::Error as TomlError;
 
-const MANIFEST_NAME: &str = "Cargo.toml";
-const MARKER: &str = "<!-- cargo-sync-readme -->";
-const MARKER_START: &str = "<!-- cargo-sync-readme start -->";
-const MARKER_END: &str = "<!-- cargo-sync-readme end -->";
+const MANIFEST_NAME: &str   = "Cargo.toml";
+const MARKER: &str          = "<!-- cargo-sync-readme -->";
+const MARKER_START: &str    = "<!-- cargo-sync-readme start -->";
+const MARKER_END: &str      = "<!-- cargo-sync-readme end -->";
+const MARKER_RE: &str       = "^<!-- cargo-sync-readme -->$";
+const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->$";
+const MARKER_END_RE: &str   = "^<!-- cargo-sync-readme end -->$";
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "cargo-sync-readme")]
@@ -312,22 +316,35 @@ where P: AsRef<Path>,
   let mut content = String::new();
 
   let _ = file.read_to_string(&mut content);
+  let mut marker_re_builder = RegexBuilder::new(MARKER_RE);
+  marker_re_builder.multi_line(true);
+  let marker_re = marker_re_builder.build().unwrap();
 
-  if let Some(marker_offset) = content.find(MARKER) {
+  if let Some(marker_match) = marker_re.find(&content) {
     // try to look for the sync marker (first time using the tool)
+    let marker_offset = marker_match.start();
     let first_part = &content[0 .. marker_offset];
     let second_part = &content[marker_offset + MARKER.len() ..];
 
     Ok(reformat_with_markers(first_part, new_readme, second_part))
   } else {
     // try to look for the start and end markers (already used the tool)
-    let marker_start_offset = content.find(MARKER_START);
-    let marker_end_offset = content.find(MARKER_END);
+    let mut marker_start_re_builder = RegexBuilder::new(MARKER_START_RE);
+    marker_start_re_builder.multi_line(true);
+    let marker_start_re = marker_start_re_builder.build().unwrap();
+    let mut marker_end_re_builder = RegexBuilder::new(MARKER_END_RE);
+    marker_end_re_builder.multi_line(true);
+    let marker_end_re = marker_end_re_builder.build().unwrap();
 
-    match (marker_start_offset, marker_end_offset) {
-      (Some(start), Some(end)) => {
-        let first_part = &content[0 .. start];
-        let second_part = &content[end + MARKER_END.len() ..];
+    let marker_start = marker_start_re.find(&content);
+    let marker_end = marker_end_re.find(&content);
+
+    match (marker_start, marker_end) {
+      (Some(start_match), Some(end_match)) => {
+        let start_offset = start_match.start();
+        let end_offset = end_match.end();
+        let first_part = &content[0 .. start_offset];
+        let second_part = &content[end_offset ..];
 
         Ok(reformat_with_markers(first_part, new_readme, second_part))
       },
@@ -339,7 +356,7 @@ where P: AsRef<Path>,
 
 // Reformat the README by inserting the documentation between the start and end markers.
 fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str) -> String {
-  format!("{}{}\n\n{}\n{}\n{}", first_part, MARKER_START, doc, MARKER_END, second_part)
+  format!("{}{}\n\n{}\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
 }
 
 /// Strip hidden documentation tests from a readme.
