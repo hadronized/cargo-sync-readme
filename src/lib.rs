@@ -55,73 +55,86 @@ impl Manifest {
   fn new(toml: Value, path: PathBuf) -> Self {
     Manifest { toml, parent_dir: path.parent().unwrap().to_owned() }
   }
-}
 
-/// Get the TOML-formatted manifest by looking up the current directory; if not found, go to the
-/// parent directory and recursively retry until one is found… eventually.
-pub fn find_manifest<P>(dir: P) -> Result<Manifest, FindManifestError> where P: AsRef<Path> {
-  let dir = dir.as_ref();
+  /// Get the TOML-formatted manifest by looking up the current directory; if not found, go to the
+  /// parent directory and recursively retry until one is found… eventually.
+  pub fn find_manifest<P>(dir: P) -> Result<Self, FindManifestError> where P: AsRef<Path> {
+    let dir = dir.as_ref();
 
-  if let Ok(mut dir_entry) = read_dir(dir) {
-    if let Some(file_entry) = dir_entry.find(
-      |entry| {
-        match entry {
-          Ok(entry) if entry.file_name() == MANIFEST_NAME => true,
-          _ => false
-        }
-      }) {
-      let path = file_entry.unwrap().path();
-      let mut file = File::open(&path).map_err(|_| FindManifestError::CannotOpenManifest(path.clone()))?;
-      let mut file_str = String::new();
+    if let Ok(mut dir_entry) = read_dir(dir) {
+      if let Some(file_entry) = dir_entry.find(
+        |entry| {
+          match entry {
+            Ok(entry) if entry.file_name() == MANIFEST_NAME => true,
+            _ => false
+          }
+        }) {
+        let path = file_entry.unwrap().path();
+        let mut file = File::open(&path).map_err(|_| FindManifestError::CannotOpenManifest(path.clone()))?;
+        let mut file_str = String::new();
 
-      let _ = file.read_to_string(&mut file_str);
-      let toml = file_str.parse().map_err(FindManifestError::TomlError)?;
+        let _ = file.read_to_string(&mut file_str);
+        let toml = file_str.parse().map_err(FindManifestError::TomlError)?;
 
-      Ok(Manifest::new(toml, path))
-    } else {
-      // try to the parent
-      if let Some(parent) = dir.parent() {
-        find_manifest(parent)
+        Ok(Manifest::new(toml, path))
       } else {
-        Err(FindManifestError::CannotFindManifest)
-      }
-    }
-  } else {
-    Err(FindManifestError::CannotFindManifest)
-  }
-}
-
-/// Get the path to the file we want to take the documentation from.
-pub fn get_entry_point(manifest: &Manifest) -> Option<PathBuf> {
-  match get_entry_point_from_manifest(&manifest.toml) {
-    Some(ep) => Some(ep.into()),
-    None => {
-      // we need to guess whether it’s a lib or a binary crate
-      let lib_path = manifest.parent_dir.join("src/lib.rs");
-
-      if lib_path.is_file() {
-        Some(lib_path)
-      } else {
-        let main_path = manifest.parent_dir.join("src/main.rs");
-
-        if main_path.is_file() {
-          Some(main_path)
+        // try to the parent
+        if let Some(parent) = dir.parent() {
+          Self::find_manifest(parent)
         } else {
-          None
+          Err(FindManifestError::CannotFindManifest)
+        }
+      }
+    } else {
+      Err(FindManifestError::CannotFindManifest)
+    }
+  }
+
+  /// Get the path to the file we want to take the documentation from.
+  pub fn entry_point(&self) -> Option<PathBuf> {
+    match self.entry_point_from_toml() {
+      Some(ep) => Some(ep.into()),
+      None => {
+        // we need to guess whether it’s a lib or a binary crate
+        let lib_path = self.parent_dir.join("src/lib.rs");
+
+        if lib_path.is_file() {
+          Some(lib_path)
+        } else {
+          let main_path = self.parent_dir.join("src/main.rs");
+
+          if main_path.is_file() {
+            Some(main_path)
+          } else {
+            None
+          }
         }
       }
     }
   }
+
+  /// Extract the path to the readme file from the manifest.
+  pub fn readme(&self) -> PathBuf {
+    let readme = self.toml
+      .get("package")
+      .and_then(|p| p.get("readme"))
+      .and_then(Value::as_str)
+      //.map(|s| s.to_owned())
+      .unwrap_or("README.md");
+
+    self.parent_dir.join(readme)
+  }
+
+  fn entry_point_from_toml(&self) -> Option<String> {
+    self.toml.get("lib").or(self.toml.get("bin"))
+      .and_then(|v| v.get("path"))
+      .and_then(Value::as_str)
+      .map(|s| s.to_owned())
+  }
 }
 
-fn get_entry_point_from_manifest(toml: &Value) -> Option<String> {
-  toml.get("lib").or(toml.get("bin"))
-    .and_then(|v| v.get("path"))
-    .and_then(Value::as_str)
-    .map(|s| s.to_owned())
-}
 
-/// Open a file and get its main inner documentation (//!).
+/// Open a file and get its main inner documentation (//!), applying filters if needed.
 pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: AsRef<Path> {
   let mut file = File::open(path.as_ref()).unwrap();
   let mut content = String::new();
@@ -155,17 +168,6 @@ pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: 
       }
     })
     .collect()
-}
-
-/// Extract the path to the readme file from the manifest.
-pub fn get_readme(manifest: &Manifest) -> PathBuf {
-  let readme = manifest.toml
-    .get("package")
-    .and_then(|p| p.get("readme"))
-    .and_then(Value::as_str)
-    //.map(|s| s.to_owned())
-    .unwrap_or("README.md");
-  manifest.parent_dir.join(readme)
 }
 
 #[derive(Debug)]

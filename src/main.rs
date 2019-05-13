@@ -67,7 +67,7 @@ use std::process;
 use structopt::StructOpt;
 
 use cargo_sync_readme::{
-  get_entry_point, get_readme, extract_inner_doc, find_manifest, read_readme, transform_readme
+  Manifest, extract_inner_doc, read_readme, transform_readme
 };
 
 #[derive(Debug, StructOpt)]
@@ -90,14 +90,14 @@ fn main() {
   let cli_opt = CliOpt::from_args();
 
   if let Ok(pwd) = current_dir() {
-    match find_manifest(pwd) {
+    match Manifest::find_manifest(pwd) {
       Ok(ref manifest) => {
-        let entry_point = get_entry_point(manifest);
+        let entry_point = manifest.entry_point();
 
         if let Some(entry_point) = entry_point {
           let CliOpt::SyncReadme { strip_hidden_doc } = cli_opt;
           let doc = extract_inner_doc(entry_point, strip_hidden_doc);
-          let readme_path = get_readme(manifest);
+          let readme_path = manifest.readme();
 
           match read_readme(&readme_path).and_then(|readme| transform_readme(&readme, doc)) {
             Ok(new_readme) => {
