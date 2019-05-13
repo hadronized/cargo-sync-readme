@@ -12,6 +12,9 @@ documentation = "https://docs.rs/cargo-sync-readme"
 readme = "README.md"
 edition = "2018"
 
+[[bin]]
+name = "cargo-sync-readme"
+
 [dependencies]
 regex = "1.1"
 structopt = "0.2"
