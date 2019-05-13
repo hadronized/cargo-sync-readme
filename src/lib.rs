@@ -183,21 +183,29 @@ impl fmt::Display for TransformError {
   }
 }
 
-/// Read a readme file and return its content with the documentation injected, if any.
-///
-/// Perform any required other transformations if asked by the user.
-pub fn transform_readme<P, S>(
-  path: P,
-  new_readme: S,
-) -> Result<String, TransformError>
-where P: AsRef<Path>,
-      S: AsRef<str> {
+/// Open and read a README file.
+pub fn read_readme<P>(path: P) -> Result<String, TransformError> where P: AsRef<Path> {
   let path = path.as_ref();
-  let new_readme = new_readme.as_ref();
   let mut file = File::open(path).map_err(|_| TransformError::CannotReadReadme(path.to_owned()))?;
   let mut content = String::new();
 
   let _ = file.read_to_string(&mut content);
+
+  Ok(content)
+}
+
+/// Transform a readme file and return its content with the documentation injected, if any.
+///
+/// Perform any required other transformations if asked by the user.
+pub fn transform_readme<C, R>(
+  content: C,
+  new_readme: R,
+) -> Result<String, TransformError>
+where C: AsRef<str>,
+      R: AsRef<str> {
+  let content = content.as_ref();
+  let new_readme = new_readme.as_ref();
+
   let mut marker_re_builder = RegexBuilder::new(MARKER_RE);
   marker_re_builder.multi_line(true);
   let marker_re = marker_re_builder.build().unwrap();
