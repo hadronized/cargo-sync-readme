@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs::{File, read_dir};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use toml::Value;
 use toml::de::Error as TomlError;
 
@@ -91,23 +92,24 @@ impl Manifest {
   }
 
   /// Get the path to the file we want to take the documentation from.
-  pub fn entry_point(&self) -> Option<PathBuf> {
-    match self.entry_point_from_toml() {
+  pub fn entry_point(&self, prefer_doc_from: Option<PreferDocFrom>) -> Option<PathBuf> {
+    match self.entry_point_from_toml(prefer_doc_from) {
       Some(ep) => Some(ep.into()),
       None => {
         // we need to guess whether it’s a lib or a binary crate
         let lib_path = self.parent_dir.join("src/lib.rs");
+        let main_path = self.parent_dir.join("src/main.rs");
 
-        if lib_path.is_file() {
-          Some(lib_path)
-        } else {
-          let main_path = self.parent_dir.join("src/main.rs");
-
-          if main_path.is_file() {
-            Some(main_path)
-          } else {
-            None
+        match (lib_path.is_file(), main_path.is_file()) {
+          (true, true) => match prefer_doc_from {
+            Some(PreferDocFrom::Binary) => Some(main_path),
+            Some(PreferDocFrom::Library) => Some(lib_path),
+            _ => None
           }
+
+          (true, _) => Some(lib_path),
+          (_, true) => Some(main_path),
+          _ => None
         }
       }
     }
@@ -125,14 +127,41 @@ impl Manifest {
     self.parent_dir.join(readme)
   }
 
-  fn entry_point_from_toml(&self) -> Option<String> {
-    self.toml.get("lib").or(self.toml.get("bin"))
+  fn entry_point_from_toml(&self, prefer_from: Option<PreferDocFrom>) -> Option<String> {
+    let lib = self.toml.get("lib");
+    let bin = self.toml.get("bin");
+    let preference =
+      match prefer_from {
+        Some(PreferDocFrom::Binary) => bin.clone(),
+        Some(PreferDocFrom::Library) => lib.clone(),
+        _ => None
+      };
+
+    preference.or(lib).or(bin)
       .and_then(|v| v.get("path"))
       .and_then(Value::as_str)
       .map(|s| s.to_owned())
   }
 }
 
+/// Preferences from which file the documentation should be taken if both present.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreferDocFrom {
+  Binary,
+  Library
+}
+
+impl FromStr for PreferDocFrom {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "bin" => Ok(PreferDocFrom::Binary),
+      "lib" => Ok(PreferDocFrom::Library),
+      _ => Err("not a valid preference".to_owned())
+    }
+  }
+}
 
 /// Open a file and get its main inner documentation (//!), applying filters if needed.
 pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: AsRef<Path> {

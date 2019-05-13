@@ -67,7 +67,7 @@ use std::process;
 use structopt::StructOpt;
 
 use cargo_sync_readme::{
-  Manifest, extract_inner_doc, read_readme, transform_readme
+  Manifest, PreferDocFrom, extract_inner_doc, read_readme, transform_readme
 };
 
 #[derive(Debug, StructOpt)]
@@ -81,21 +81,37 @@ enum CliOpt {
     #[structopt(
       short = "z",
       long = "strip-hidden-doc",
+      help = "Strip Rust hidden documentation lines in the generated README.",
     )]
-    strip_hidden_doc: bool
+    strip_hidden_doc: bool,
+
+    #[structopt(
+      short = "f",
+      long = "prefer-doc-from",
+      help = "Set to either `bin` or `lib` to instruct sync-readme which file it should read documentation from.",
+    )]
+    prefer_doc_from: Option<PreferDocFrom>
   }
 }
 
+const CANNOT_FIND_ENTRY_POINT_ERR_STR: &str = "\
+Cannot find entry point (default to src/lib.rs or src/main.rs). This is likely to be due to a
+special configuration in your Cargo.toml manifest file or you’re just missing the entry point
+files.
+
+If you’re in the special situation where your crate defines both a binary and a library, you should
+consider using the -f option to hint sync-readme which file it should read the documentation from.";
+
 fn main() {
   let cli_opt = CliOpt::from_args();
+  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from } = cli_opt;
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
       Ok(ref manifest) => {
-        let entry_point = manifest.entry_point();
+        let entry_point = manifest.entry_point(prefer_doc_from);
 
         if let Some(entry_point) = entry_point {
-          let CliOpt::SyncReadme { strip_hidden_doc } = cli_opt;
           let doc = extract_inner_doc(entry_point, strip_hidden_doc);
           let readme_path = manifest.readme();
 
@@ -108,7 +124,7 @@ fn main() {
             Err(e) => eprintln!("{}", e)
           }
         } else {
-          eprintln!("Cannot find entrypoint (default to src/lib.rs or src/main.rs).");
+          eprintln!("{}", CANNOT_FIND_ENTRY_POINT_ERR_STR);
           process::exit(1);
         }
       }
