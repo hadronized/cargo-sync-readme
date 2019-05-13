@@ -199,17 +199,17 @@ pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: 
     .collect()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum TransformError {
   CannotReadReadme(PathBuf),
-  MissingOrIllFormadMarkers
+  MissingOrIllFormatMarkers
 }
 
 impl fmt::Display for TransformError {
   fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
     match *self {
       TransformError::CannotReadReadme(ref path) => write!(f, "Cannot read README at {}.", path.display()),
-      TransformError::MissingOrIllFormadMarkers => f.write_str("Markers not found or ill-formed; check your file again."),
+      TransformError::MissingOrIllFormatMarkers => f.write_str("Markers not found or ill-formed; check your file again."),
     }
   }
 }
@@ -230,12 +230,12 @@ pub fn read_readme<P>(path: P) -> Result<String, TransformError> where P: AsRef<
 /// Perform any required other transformations if asked by the user.
 pub fn transform_readme<C, R>(
   content: C,
-  new_readme: R,
+  doc: R,
 ) -> Result<String, TransformError>
 where C: AsRef<str>,
       R: AsRef<str> {
   let content = content.as_ref();
-  let new_readme = new_readme.as_ref();
+  let doc = doc.as_ref();
 
   let mut marker_re_builder = RegexBuilder::new(MARKER_RE);
   marker_re_builder.multi_line(true);
@@ -247,7 +247,7 @@ where C: AsRef<str>,
     let first_part = &content[0 .. marker_offset];
     let second_part = &content[marker_offset + MARKER.len() ..];
 
-    Ok(reformat_with_markers(first_part, new_readme, second_part))
+    Ok(reformat_with_markers(first_part, doc, second_part))
   } else {
     // try to look for the start and end markers (already used the tool)
     let mut marker_start_re_builder = RegexBuilder::new(MARKER_START_RE);
@@ -267,10 +267,10 @@ where C: AsRef<str>,
         let first_part = &content[0 .. start_offset];
         let second_part = &content[end_offset ..];
 
-        Ok(reformat_with_markers(first_part, new_readme, second_part))
+        Ok(reformat_with_markers(first_part, doc, second_part))
       },
 
-      _ => Err(TransformError::MissingOrIllFormadMarkers)
+      _ => Err(TransformError::MissingOrIllFormatMarkers)
     }
   }
 }
@@ -343,5 +343,14 @@ mod tests {
     assert_eq!(strip_hidden_doc_tests(&mut st, "~~~"), true);
     assert_eq!(strip_hidden_doc_tests(&mut st, "```"), true);
     assert_eq!(strip_hidden_doc_tests(&mut st, "# still okay"), true);
+  }
+
+  #[test]
+  fn windows_line_ending() {
+    let doc = "Test! <3";
+    let readme = "Foo\r\n<!-- cargo-sync-readme -->\r\nbar\r\nzoo";
+    let output = transform_readme(readme, doc);
+
+    assert_eq!(output, Ok("Foo\r\nTest! <3\r\nbar\r\nzoo".to_owned()));
   }
 }
