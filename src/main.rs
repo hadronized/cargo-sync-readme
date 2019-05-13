@@ -67,7 +67,7 @@ use std::process;
 use structopt::StructOpt;
 
 use cargo_sync_readme::{
-  get_entry_point, get_readme, extract_inner_doc, find_manifest, transform_readme
+  get_entry_point, get_readme, extract_inner_doc, find_manifest, read_readme, transform_readme
 };
 
 #[derive(Debug, StructOpt)]
@@ -99,7 +99,7 @@ fn main() {
           let doc = extract_inner_doc(entry_point, strip_hidden_doc);
           let readme_path = get_readme(manifest);
 
-          match transform_readme(&readme_path, doc) {
+          match read_readme(&readme_path).and_then(|readme| transform_readme(&readme, doc)) {
             Ok(new_readme) => {
               let mut file = File::create(readme_path).unwrap();
               let _ = file.write_all(new_readme.as_bytes());
