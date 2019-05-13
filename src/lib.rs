@@ -163,7 +163,7 @@ impl FromStr for PreferDocFrom {
 }
 
 /// Open a file and get its main inner documentation (//!), applying filters if needed.
-pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: AsRef<Path> {
+pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool, crlf: bool) -> String where P: AsRef<Path> {
   let mut file = File::open(path.as_ref()).unwrap();
   let mut content = String::new();
   let mut codeblock_st = CodeBlockState::None;
@@ -174,7 +174,13 @@ pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: 
     .lines()
     .skip_while(|l| !l.starts_with("//!"))
     .take_while(|l| l.starts_with("//!"))
-    .map(|l| format!("{}\n", l.trim_start_matches("//!")))
+    .map(|l| {
+      if crlf {
+        format!("{}\r\n", l.trim_start_matches("//!"))
+      } else {
+        format!("{}\n", l.trim_start_matches("//!"))
+      }
+    })
     .collect();
 
   // find the minimal offset of all lines for which the first character is not a space
@@ -187,7 +193,7 @@ pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool) -> String where P: 
   // trim by the given offset to remove the introduced space by the Rust doc
   lines
     .iter()
-    .map(|line| if line == "\n" { line } else { &line[offset..] })
+    .map(|line| if crlf && line == "\r\n" || line == "\n" { line } else { &line[offset..] })
     .filter(|l| {
       if strip_hidden_doc {
         strip_hidden_doc_tests(&mut codeblock_st, l)
@@ -230,6 +236,7 @@ pub fn read_readme<P>(path: P) -> Result<String, TransformError> where P: AsRef<
 pub fn transform_readme<C, R>(
   content: C,
   doc: R,
+  crlf: bool
 ) -> Result<String, TransformError>
 where C: AsRef<str>,
       R: AsRef<str> {
@@ -243,9 +250,9 @@ where C: AsRef<str>,
   if let Some(marker_match) = marker_re.find(&content) {
     // try to look for the sync marker (first time using the tool)
     let first_part = &content[0 .. marker_match.start()];
-    let second_part = &content[marker_match.end() ..];
+    let second_part = &content[if crlf { marker_match.end() - 1 } else { marker_match.end() } ..];
 
-    Ok(reformat_with_markers(first_part, doc, second_part))
+    Ok(reformat_with_markers(first_part, doc, second_part, crlf))
   } else {
     // try to look for the start and end markers (already used the tool)
     let mut marker_start_re_builder = RegexBuilder::new(MARKER_START_RE);
@@ -261,9 +268,9 @@ where C: AsRef<str>,
     match (marker_start, marker_end) {
       (Some(start_match), Some(end_match)) => {
         let first_part = &content[0 .. start_match.start()];
-        let second_part = &content[end_match.end() ..];
+        let second_part = &content[if crlf { end_match.end() - 1 } else { end_match.end() } ..];
 
-        Ok(reformat_with_markers(first_part, doc, second_part))
+        Ok(reformat_with_markers(first_part, doc, second_part, crlf))
       },
 
       _ => Err(TransformError::MissingOrIllFormatMarkers)
@@ -272,8 +279,14 @@ where C: AsRef<str>,
 }
 
 // Reformat the README by inserting the documentation between the start and end markers.
-fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str) -> String {
-  format!("{}{}\n\n{}\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
+//
+// The crlf` parameter is used to insert a '\r' before '\n'.
+fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str, crlf: bool) -> String {
+  if crlf {
+    format!("{}{}\r\n\r\n{}\r\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
+  } else {
+    format!("{}{}\n\n{}\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
+  }
 }
 
 /// Strip hidden documentation tests from a readme.
@@ -345,17 +358,16 @@ mod tests {
   fn simple_transform() {
     let doc = "Test! <3";
     let readme = "Foo\n<!-- cargo-sync-readme -->\nbar\nzoo";
-    let output = transform_readme(readme, doc);
+    let output = transform_readme(readme, doc, false);
 
     assert_eq!(output, Ok("Foo\n<!-- cargo-sync-readme start -->\n\nTest! <3\n<!-- cargo-sync-readme end -->\nbar\nzoo".to_owned()));
   }
 
-  #[cfg(target_os = "windows")]
   #[test]
   fn windows_line_endings() {
     let doc = "Test! <3";
     let readme = "Foo\r\n<!-- cargo-sync-readme -->\r\nbar\r\nzoo";
-    let output = transform_readme(readme, doc);
+    let output = transform_readme(readme, doc, true);
 
     assert_eq!(output, Ok("Foo\r\n<!-- cargo-sync-readme start -->\r\n\r\nTest! <3\r\n<!-- cargo-sync-readme end -->\r\nbar\r\nzoo".to_owned()));
   }

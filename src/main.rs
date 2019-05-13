@@ -67,6 +67,10 @@
 //!     documentation from. This might be wanted to override the default behavior that reads from
 //!     the Cargo.toml manifest, the autodetection based on files or when you have both a binary
 //!     and library setup (in which case this option is mandatory).
+//!   - `--crlf`: this flag makes the tool’s newlines behaves according to CRLF. It will not change
+//!     the already present newlines but expect your document to be formatted with CRLF. If it’s
+//!     not then you will get punched in the face by a squirrel driving a motorcycle. Sorry. Also,
+//!     it will generate newlines with CRLF.
 //!
 //! ## Q/A and troubleshooting
 //!
@@ -114,7 +118,13 @@ enum CliOpt {
       long = "prefer-doc-from",
       help = "Set to either `bin` or `lib` to instruct sync-readme which file it should read documentation from.",
     )]
-    prefer_doc_from: Option<PreferDocFrom>
+    prefer_doc_from: Option<PreferDocFrom>,
+
+    #[structopt(
+      long = "crlf",
+      help = "Generate documentation with CRLF for Windows-style line endings. This will not affect the already present newlines.",
+    )]
+    crlf: bool,
   }
 }
 
@@ -128,7 +138,7 @@ consider using the -f option to hint sync-readme which file it should read the d
 
 fn main() {
   let cli_opt = CliOpt::from_args();
-  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from } = cli_opt;
+  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from, crlf } = cli_opt;
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
@@ -136,10 +146,10 @@ fn main() {
         let entry_point = manifest.entry_point(prefer_doc_from);
 
         if let Some(entry_point) = entry_point {
-          let doc = extract_inner_doc(entry_point, strip_hidden_doc);
+          let doc = extract_inner_doc(entry_point, strip_hidden_doc, crlf);
           let readme_path = manifest.readme();
 
-          match read_readme(&readme_path).and_then(|readme| transform_readme(&readme, doc)) {
+          match read_readme(&readme_path).and_then(|readme| transform_readme(&readme, doc, crlf)) {
             Ok(new_readme) => {
               let mut file = File::create(readme_path).unwrap();
               let _ = file.write_all(new_readme.as_bytes());
