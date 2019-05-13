@@ -1,8 +1,13 @@
 ## 0.1.5
 
-> Thu May 10th 2019
+> Tue May 14th 2019
 
   - Change the handling of newlines and internal algorithms to look for markers.
+  - Add the `--crlf` switch to treat newlines as CRLF.
+  - Add the `-f --prefer-doc-from` option. This allows people to select which file the documentation
+    should be picked from. It can either be `bin` for binary (i.e. by default, `src/main.rs`) or
+    `lib` for library (`src/lib.rs`). The regular ways works (Cargo.toml file parsing and/or file
+    detection). This option should be useful when you have a crate with both a binary and library.
 
 ## 0.1.4
 
