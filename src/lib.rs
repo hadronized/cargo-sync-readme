@@ -10,12 +10,11 @@ use toml::Value;
 use toml::de::Error as TomlError;
 
 const MANIFEST_NAME: &str   = "Cargo.toml";
-const MARKER: &str          = "<!-- cargo-sync-readme -->";
 const MARKER_START: &str    = "<!-- cargo-sync-readme start -->";
 const MARKER_END: &str      = "<!-- cargo-sync-readme end -->";
-const MARKER_RE: &str       = "^<!-- cargo-sync-readme -->$";
-const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->$";
-const MARKER_END_RE: &str   = "^<!-- cargo-sync-readme end -->$";
+const MARKER_RE: &str       = "^<!-- cargo-sync-readme -->\r?$";
+const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->\r?$";
+const MARKER_END_RE: &str   = "^<!-- cargo-sync-readme end -->\r?$";
 
 /// Common Markdown code-block state.
 ///
@@ -243,9 +242,8 @@ where C: AsRef<str>,
 
   if let Some(marker_match) = marker_re.find(&content) {
     // try to look for the sync marker (first time using the tool)
-    let marker_offset = marker_match.start();
-    let first_part = &content[0 .. marker_offset];
-    let second_part = &content[marker_offset + MARKER.len() ..];
+    let first_part = &content[0 .. marker_match.start()];
+    let second_part = &content[marker_match.end() ..];
 
     Ok(reformat_with_markers(first_part, doc, second_part))
   } else {
@@ -262,10 +260,8 @@ where C: AsRef<str>,
 
     match (marker_start, marker_end) {
       (Some(start_match), Some(end_match)) => {
-        let start_offset = start_match.start();
-        let end_offset = end_match.end();
-        let first_part = &content[0 .. start_offset];
-        let second_part = &content[end_offset ..];
+        let first_part = &content[0 .. start_match.start()];
+        let second_part = &content[end_match.end() ..];
 
         Ok(reformat_with_markers(first_part, doc, second_part))
       },
@@ -346,11 +342,21 @@ mod tests {
   }
 
   #[test]
-  fn windows_line_ending() {
+  fn simple_transform() {
+    let doc = "Test! <3";
+    let readme = "Foo\n<!-- cargo-sync-readme -->\nbar\nzoo";
+    let output = transform_readme(readme, doc);
+
+    assert_eq!(output, Ok("Foo\n<!-- cargo-sync-readme start -->\n\nTest! <3\n<!-- cargo-sync-readme end -->\nbar\nzoo".to_owned()));
+  }
+
+  #[cfg(target_os = "windows")]
+  #[test]
+  fn windows_line_endings() {
     let doc = "Test! <3";
     let readme = "Foo\r\n<!-- cargo-sync-readme -->\r\nbar\r\nzoo";
     let output = transform_readme(readme, doc);
 
-    assert_eq!(output, Ok("Foo\r\nTest! <3\r\nbar\r\nzoo".to_owned()));
+    assert_eq!(output, Ok("Foo\r\n<!-- cargo-sync-readme start -->\r\n\r\nTest! <3\r\n<!-- cargo-sync-readme end -->\r\nbar\r\nzoo".to_owned()));
   }
 }
