@@ -69,6 +69,10 @@ Disneyland Parc experience, but less exciting).
     documentation from. This might be wanted to override the default behavior that reads from
     the Cargo.toml manifest, the autodetection based on files or when you have both a binary
     and library setup (in which case this option is mandatory).
+  - `--crlf`: this flag makes the tool’s newlines behaves according to CRLF. It will not change
+    the already present newlines but expect your document to be formatted with CRLF. If it’s
+    not then you will get punched in the face by a squirrel driving a motorcycle. Sorry. Also,
+    it will generate newlines with CRLF.
 
 ## Q/A and troubleshooting
 
