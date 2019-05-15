@@ -125,6 +125,13 @@ enum CliOpt {
       help = "Generate documentation with CRLF for Windows-style line endings. This will not affect the already present newlines.",
     )]
     crlf: bool,
+
+    #[structopt(
+      short = "c",
+      long = "check",
+      help = "Check if the README is synchronized.",
+    )]
+    check: bool,
   }
 }
 
@@ -138,7 +145,7 @@ consider using the -f option to hint sync-readme which file it should read the d
 
 fn main() {
   let cli_opt = CliOpt::from_args();
-  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from, crlf } = cli_opt;
+  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from, crlf, check } = cli_opt;
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
@@ -148,9 +155,21 @@ fn main() {
         if let Some(entry_point) = entry_point {
           let doc = extract_inner_doc(entry_point, strip_hidden_doc, crlf);
           let readme_path = manifest.readme();
+          let transformation =
+              read_readme(&readme_path)
+                  .and_then(|readme|
+                      transform_readme(&readme, doc, crlf).map(|new| (readme, new))
+                  );
 
-          match read_readme(&readme_path).and_then(|readme| transform_readme(&readme, doc, crlf)) {
-            Ok(new_readme) => {
+          match transformation {
+            Ok((ref old_readme, ref new_readme)) if check => {
+              if old_readme != new_readme {
+                eprintln!("README is not synchronized!");
+                process::exit(1);
+              }
+            }
+
+            Ok((_, ref new_readme)) => {
               let mut file = File::create(readme_path).unwrap();
               let _ = file.write_all(new_readme.as_bytes());
             }
