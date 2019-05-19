@@ -71,7 +71,7 @@
 //!     the already present newlines but expect your document to be formatted with CRLF. If it’s
 //!     not then you will get punched in the face by a squirrel driving a motorcycle. Sorry. Also,
 //!     it will generate newlines with CRLF.
-//!   - `-f --check`: check whether the *readme* is synchronized.
+//!   - `-c --check`: check whether the *readme* is synchronized.
 //!
 //! ## Q/A and troubleshooting
 //!
