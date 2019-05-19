@@ -58,11 +58,12 @@
 //! The command has several options and flags you can use to customize the experience (a bit like a
 //! Disneyland Parc experience, but less exciting).
 //!
-//!   - `-z` or `--strip-hidden-doc`: this flag will perform a special transformation on your
+//!   - `-z` or `--show-hidden-doc`: this flag will disable a special transformation on your
 //!     documentation when copying into the region you’ve selected in your *readme*. All
 //!     ignored / hidden lines (the ones starting with a dash in code block in Rust doc) will simply
-//!     be dropped. This might be wanted if you want your *readme* documentation to look like the
-//!     one on docs.rs, where the hidden lines don’t show up.
+//!     be dropped by default. This might be wanted if you want your *readme* documentation to look
+//!     like the one on docs.rs, where the hidden lines don’t show up. If you don’t, use this flag
+//!     to disable this behavior.
 //!   - `-f` or `--prefer-doc-from`: this option allows you to override the place where to get the
 //!     documentation from. This might be wanted to override the default behavior that reads from
 //!     the Cargo.toml manifest, the autodetection based on files or when you have both a binary
