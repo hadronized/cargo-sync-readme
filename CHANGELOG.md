@@ -1,3 +1,12 @@
+# 0.2
+
+> Sun May 19th 2019
+
+  - Change the meaning of the `-z` flag. Stripping hidden Rust doc lines is now enabled by default,
+    as it is a better logical default. `-z` disable stripping and will show the hidden lines.
+  - Introduce the `-c --check` switch that will make the tool behave in a *dry run* by checking
+    whether the *readme* file is correctly synchronized.
+
 ## 0.1.5
 
 > Tue May 14th 2019

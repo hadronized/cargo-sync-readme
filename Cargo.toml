@@ -1,6 +1,6 @@
 [package]
 name = "cargo-sync-readme"
-version = "0.1.6"
+version = "0.2.0"
 license = "BSD-3-Clause"
 authors = ["Dimitri Sabadie <dimitri.sabadie@gmail.com>"]
 description = "Generate a Markdown section in your README based on your Rust documentation"
