@@ -15,3 +15,6 @@ script:
   - cargo --version
   - cargo build --verbose
   - cargo test --verbose
+  # Ensure README is synchronized
+  - cargo install cargo-sync-readme
+  - cargo sync-readme -c -f bin
