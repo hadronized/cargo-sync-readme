@@ -71,6 +71,7 @@
 //!     the already present newlines but expect your document to be formatted with CRLF. If it’s
 //!     not then you will get punched in the face by a squirrel driving a motorcycle. Sorry. Also,
 //!     it will generate newlines with CRLF.
+//!   - `-f --check`: check whether the *readme* is synchronized.
 //!
 //! ## Q/A and troubleshooting
 //!
@@ -129,7 +130,7 @@ enum CliOpt {
     #[structopt(
       short = "c",
       long = "check",
-      help = "Check if the README is synchronized.",
+      help = "Check whether the README is synchronized.",
     )]
     check: bool,
   }
@@ -144,8 +145,7 @@ If you’re in the special situation where your crate defines both a binary and 
 consider using the -f option to hint sync-readme which file it should read the documentation from.";
 
 fn main() {
-  let cli_opt = CliOpt::from_args();
-  let CliOpt::SyncReadme { show_hidden_doc, prefer_doc_from, crlf, check } = cli_opt;
+  let CliOpt::SyncReadme { show_hidden_doc, prefer_doc_from, crlf, check } = CliOpt::from_args();
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
