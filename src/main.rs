@@ -108,10 +108,10 @@ enum CliOpt {
   SyncReadme {
     #[structopt(
       short = "z",
-      long = "strip-hidden-doc",
-      help = "Strip Rust hidden documentation lines in the generated README.",
+      long = "show-hidden-doc",
+      help = "Show Rust hidden documentation lines in the generated README.",
     )]
-    strip_hidden_doc: bool,
+    show_hidden_doc: bool,
 
     #[structopt(
       short = "f",
@@ -145,7 +145,7 @@ consider using the -f option to hint sync-readme which file it should read the d
 
 fn main() {
   let cli_opt = CliOpt::from_args();
-  let CliOpt::SyncReadme { strip_hidden_doc, prefer_doc_from, crlf, check } = cli_opt;
+  let CliOpt::SyncReadme { show_hidden_doc, prefer_doc_from, crlf, check } = cli_opt;
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
@@ -153,7 +153,7 @@ fn main() {
         let entry_point = manifest.entry_point(prefer_doc_from);
 
         if let Some(entry_point) = entry_point {
-          let doc = extract_inner_doc(entry_point, strip_hidden_doc, crlf);
+          let doc = extract_inner_doc(entry_point, show_hidden_doc, crlf);
           let readme_path = manifest.readme();
           let transformation =
               read_readme(&readme_path)

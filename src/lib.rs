@@ -163,7 +163,7 @@ impl FromStr for PreferDocFrom {
 }
 
 /// Open a file and get its main inner documentation (//!), applying filters if needed.
-pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool, crlf: bool) -> String where P: AsRef<Path> {
+pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> String where P: AsRef<Path> {
   let mut file = File::open(path.as_ref()).unwrap();
   let mut content = String::new();
   let mut codeblock_st = CodeBlockState::None;
@@ -195,10 +195,10 @@ pub fn extract_inner_doc<P>(path: P, strip_hidden_doc: bool, crlf: bool) -> Stri
     .iter()
     .map(|line| if crlf && line == "\r\n" || line == "\n" { line } else { &line[offset..] })
     .filter(|l| {
-      if strip_hidden_doc {
-        strip_hidden_doc_tests(&mut codeblock_st, l)
-      } else {
+      if show_hidden_doc {
         true
+      } else {
+        strip_hidden_doc_tests(&mut codeblock_st, l)
       }
     })
     .collect()
