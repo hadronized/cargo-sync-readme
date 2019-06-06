@@ -15,12 +15,13 @@ const MARKER_END: &str      = "<!-- cargo-sync-readme end -->";
 const MARKER_RE: &str       = "^<!-- cargo-sync-readme -->\r?$";
 const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->\r?$";
 const MARKER_END_RE: &str   = "^<!-- cargo-sync-readme end -->\r?$";
+const RUST_LANG_ANNOTATION: &str = "rust";
 
 /// Common Markdown code-block state.
 ///
 /// This type helps track which state we are currently in when parsing code-blocks. It can either
 /// be none or a code-block with either backticks (`) or tildes (~).
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum CodeBlockState {
   None,
   InWithBackticks,
@@ -170,7 +171,7 @@ pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> Strin
 
   let _ = file.read_to_string(&mut content);
 
-  let lines: Vec<_> = content
+  let lines: Vec<String> = content
     .lines()
     .skip_while(|l| !l.trim_start().starts_with("//!"))
     .take_while(|l| l.trim_start().starts_with("//!"))
@@ -191,10 +192,15 @@ pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> Strin
     .min()
     .unwrap_or(0);
 
-  // trim by the given offset to remove the introduced space by the Rust doc
-  lines
-    .iter()
-    .map(|line| if crlf && line == "\r\n" || line == "\n" { line } else { &line[offset..] })
+  let sanitized_annotated_lines: Vec<String> = lines
+    .into_iter()
+    .map(|line| if crlf && line == "\r\n" || line == "\n" { line } else { line[offset..].to_owned() })
+    .map(|line| annotate_code_blocks(&mut codeblock_st, line))
+    .collect();
+
+
+  sanitized_annotated_lines
+    .into_iter()
     .filter(|l| {
       if show_hidden_doc {
         true
@@ -287,6 +293,40 @@ fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str, crlf: b
     format!("{}{}\r\n\r\n{}\r\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
   } else {
     format!("{}{}\n\n{}\n{}{}", first_part, MARKER_START, doc, MARKER_END, second_part)
+  }
+}
+
+fn annotate_code_blocks(st: &mut CodeBlockState, line: String) -> String {
+  match st {
+    CodeBlockState::None => {
+      if line.starts_with("~~~") {
+        *st = CodeBlockState::InWithTildes;
+      } else if line.starts_with("```") {
+        *st = CodeBlockState::InWithBackticks;
+      }
+
+      if line == "```\n" {
+        line.replace("\n", &format!("{}\n", RUST_LANG_ANNOTATION))
+      } else {
+        line
+      }
+    }
+
+    CodeBlockState::InWithTildes => {
+        if line.starts_with("~~~") {
+          *st = CodeBlockState::None;
+        }
+
+        line
+    }
+
+    CodeBlockState::InWithBackticks => {
+        if line.starts_with("```") {
+          *st = CodeBlockState::None;
+        }
+
+        line
+    }
   }
 }
 
