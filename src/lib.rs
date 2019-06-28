@@ -163,15 +163,19 @@ impl FromStr for PreferDocFrom {
   }
 }
 
-/// Open a file and get its main inner documentation (//!), applying filters if needed.
-pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> String where P: AsRef<Path> {
+fn load_file_to_string<P>(path: P) -> String where P: AsRef<Path> {
   let mut file = File::open(path.as_ref()).unwrap();
   let mut content = String::new();
-  let mut codeblock_st = CodeBlockState::None;
-
   let _ = file.read_to_string(&mut content);
 
-  let lines: Vec<String> = content
+  content
+}
+
+fn transform_inner_doc(doc: &str, show_hidden_doc: bool, crlf: bool) -> String {
+  let mut codeblock_st = CodeBlockState::None;
+
+
+  let lines: Vec<String> = doc
     .lines()
     .skip_while(|l| !l.trim_start().starts_with("//!"))
     .take_while(|l| l.trim_start().starts_with("//!"))
@@ -195,7 +199,7 @@ pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> Strin
   let sanitized_annotated_lines: Vec<String> = lines
     .into_iter()
     .map(|line| if crlf && line == "\r\n" || line == "\n" { line } else { line[offset..].to_owned() })
-    .map(|line| annotate_code_blocks(&mut codeblock_st, line))
+    .map(|line| annotate_code_blocks(&mut codeblock_st, line, crlf))
     .collect();
 
 
@@ -209,6 +213,13 @@ pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> Strin
       }
     })
     .collect()
+}
+
+/// Open a file and get its main inner documentation (//!), applying filters if needed.
+pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> String where P: AsRef<Path> {
+  let doc = load_file_to_string(path);
+  
+  transform_inner_doc(&doc, show_hidden_doc, crlf)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -296,7 +307,7 @@ fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str, crlf: b
   }
 }
 
-fn annotate_code_blocks(st: &mut CodeBlockState, line: String) -> String {
+fn annotate_code_blocks(st: &mut CodeBlockState, line: String, crlf: bool) -> String {
   match st {
     CodeBlockState::None => {
       if line.starts_with("~~~") {
@@ -305,7 +316,9 @@ fn annotate_code_blocks(st: &mut CodeBlockState, line: String) -> String {
         *st = CodeBlockState::InWithBackticks;
       }
 
-      if line == "```\n" {
+      if crlf && line.ends_with("```\r\n") {
+        line.replace("\r\n", &format!("{}\r\n", RUST_LANG_ANNOTATION))
+      } else if !crlf && line.ends_with("```\n") {
         line.replace("\n", &format!("{}\n", RUST_LANG_ANNOTATION))
       } else {
         line
@@ -411,5 +424,29 @@ mod tests {
     let output = transform_readme(readme, doc, true);
 
     assert_eq!(output, Ok("Foo\r\n<!-- cargo-sync-readme start -->\r\n\r\nTest! <3\r\n<!-- cargo-sync-readme end -->\r\nbar\r\nzoo".to_owned()));
+  }
+
+  #[test]
+  fn annotate_default_code_blocks() {
+    let doc = "//!```\n//!fn add(a: u8, b: u8) -> u8 { a + b }\n//!```";
+    let output = transform_inner_doc(doc, false, false);
+
+    assert_eq!(output, "```rust\nfn add(a: u8, b: u8) -> u8 { a + b }\n```\n".to_owned());
+  }
+
+  #[test]
+  fn does_not_annotate_annotated_code_blocks() {
+    let doc = "//!```text\n//!echo Hello, World!\n//!```";
+    let output = transform_inner_doc(doc, false, false);
+
+    assert_eq!(output, "```text\necho Hello, World!\n```\n".to_owned());
+  }
+
+  #[test]
+  fn annotate_default_code_blocks_windows() {
+    let doc = "//!```\r\n//!fn add(a: u8, b: u8) -> u8 { a + b }\r\n//!```";
+    let output = transform_inner_doc(doc, false, true);
+
+    assert_eq!(output, "```rust\r\nfn add(a: u8, b: u8) -> u8 { a + b }\r\n```\r\n".to_owned());
   }
 }

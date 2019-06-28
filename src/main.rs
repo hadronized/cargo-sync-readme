@@ -85,12 +85,6 @@
 //!
 //! This is likely to be the hidden documentation feature from `rustdoc`. To fix this problem,
 //! re-run with:
-//! 
-//! ```
-//! pub fn add(a: u8, b: u8) {
-//!   a + b
-//! }
-//! ```
 //!
 //! ```text
 //! cargo sync-readme -z
