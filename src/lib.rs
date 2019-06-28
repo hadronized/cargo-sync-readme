@@ -435,6 +435,14 @@ mod tests {
   }
 
   #[test]
+  fn annotate_default_code_blocks_windows() {
+    let doc = "//!```\r\n//!fn add(a: u8, b: u8) -> u8 { a + b }\r\n//!```";
+    let output = transform_inner_doc(doc, false, true);
+
+    assert_eq!(output, "```rust\r\nfn add(a: u8, b: u8) -> u8 { a + b }\r\n```\r\n".to_owned());
+  }
+
+  #[test]
   fn does_not_annotate_annotated_code_blocks() {
     let doc = "//!```text\n//!echo Hello, World!\n//!```";
     let output = transform_inner_doc(doc, false, false);
@@ -443,10 +451,10 @@ mod tests {
   }
 
   #[test]
-  fn annotate_default_code_blocks_windows() {
-    let doc = "//!```\r\n//!fn add(a: u8, b: u8) -> u8 { a + b }\r\n//!```";
+  fn does_not_annotate_annotated_code_blocks_windows() {
+    let doc = "//!```text\r\n//!echo Hello, World!\r\n//!```";
     let output = transform_inner_doc(doc, false, true);
 
-    assert_eq!(output, "```rust\r\nfn add(a: u8, b: u8) -> u8 { a + b }\r\n```\r\n".to_owned());
+    assert_eq!(output, "```text\r\necho Hello, World!\r\n```\r\n".to_owned());
   }
 }
