@@ -1,3 +1,9 @@
+## 0.2.1
+
+> Wed August 7th 2019
+
+  - Fix a bug that would drop `//!` lines starting with whites.
+
 # 0.2
 
 > Sun May 19th 2019
