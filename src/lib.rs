@@ -172,13 +172,14 @@ pub fn extract_inner_doc<P>(path: P, show_hidden_doc: bool, crlf: bool) -> Strin
 
   let lines: Vec<_> = content
     .lines()
-    .skip_while(|l| !l.starts_with("//!"))
-    .take_while(|l| l.starts_with("//!"))
+    .skip_while(|l| !l.trim_start().starts_with("//!"))
+    .take_while(|l| l.trim_start().starts_with("//!"))
     .map(|l| {
+      let l = l.trim_start().trim_start_matches("//!");
       if crlf {
-        format!("{}\r\n", l.trim_start_matches("//!"))
+        format!("{}\r\n", l)
       } else {
-        format!("{}\n", l.trim_start_matches("//!"))
+        format!("{}\n", l)
       }
     })
     .collect();
