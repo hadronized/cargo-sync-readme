@@ -12,10 +12,16 @@ documentation = "https://docs.rs/cargo-sync-readme"
 readme = "README.md"
 edition = "2018"
 
+[features]
+default = ["cli"]
+
+cli = ["structopt"]
+
 [[bin]]
 name = "cargo-sync-readme"
+required-features = ["cli"]
 
 [dependencies]
 regex = "1.1"
-structopt = "0.3"
+structopt = { version = "0.3", optional = true }
 toml = "0.5"
