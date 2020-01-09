@@ -17,5 +17,5 @@ name = "cargo-sync-readme"
 
 [dependencies]
 regex = "1.1"
-structopt = "0.2"
-toml = "0.4"
+structopt = "0.3"
+toml = "0.5"
