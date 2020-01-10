@@ -101,36 +101,35 @@ use cargo_sync_readme::{
 };
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "cargo-sync-readme")]
+#[structopt(author)]
 enum CliOpt {
   #[structopt(
-    name = "sync-readme",
     about = "Generate a Markdown section in your README based on your Rust documentation.",
   )]
   SyncReadme {
     #[structopt(
       short = "z",
-      long = "show-hidden-doc",
+      long,
       help = "Show Rust hidden documentation lines in the generated README.",
     )]
     show_hidden_doc: bool,
 
     #[structopt(
       short = "f",
-      long = "prefer-doc-from",
+      long,
       help = "Set to either `bin` or `lib` to instruct sync-readme which file it should read documentation from.",
     )]
     prefer_doc_from: Option<PreferDocFrom>,
 
     #[structopt(
-      long = "crlf",
+      long,
       help = "Generate documentation with CRLF for Windows-style line endings. This will not affect the already present newlines.",
     )]
     crlf: bool,
 
     #[structopt(
-      short = "c",
-      long = "check",
+      short,
+      long,
       help = "Check whether the README is synchronized.",
     )]
     check: bool,
