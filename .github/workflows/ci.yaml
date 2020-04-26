@@ -44,6 +44,6 @@ jobs:
           cargo install --force cargo-sync-readme
           rustup component add rustfmt
       - name: cargo sync-readme
-        run: cargo sync-readme -c
+        run: cargo sync-readme -c -f bin
       - name: rustfmt
         run: cargo fmt -- --check
