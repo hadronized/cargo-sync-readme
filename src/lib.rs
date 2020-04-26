@@ -122,11 +122,11 @@ impl Manifest {
 
   /// Extract the path to the readme file from the manifest.
   pub fn readme(&self) -> PathBuf {
-    let readme = self.toml
+    let readme = self
+      .toml
       .get("package")
       .and_then(|p| p.get("readme"))
       .and_then(Value::as_str)
-      //.map(|s| s.to_owned())
       .unwrap_or("README.md");
 
     self.parent_dir.join(readme)

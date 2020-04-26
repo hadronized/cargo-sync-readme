@@ -80,15 +80,6 @@
 //!
 //! Not yet! If you have ideas how the tool should behave with them, please contribute with an issue or
 //! a PR!
-//!
-//! ### There are ugly lines starting with a dash (#) in the generated Rust code (examples)!
-//!
-//! This is likely to be the hidden documentation feature from `rustdoc`. To fix this problem,
-//! re-run with:
-//!
-//! ```text
-//! cargo sync-readme -z
-//! ```
 
 use std::env::current_dir;
 use std::fs::File;

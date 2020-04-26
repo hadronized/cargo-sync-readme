@@ -1,3 +1,32 @@
+# 1.0.0
+
+> Sun Apr 26th 2020
+
+## Major changes
+
+- The meaning of the triple backtick (\`) or triple tilde (~) has changed. By default now, not
+  putting any _language_ annotation assumes Rust — as this is taken from a `lib.rs` or `main.rs`.
+  The generated README content will then have annotation like:
+  ~~~
+  ```rust
+  // content here
+  ```
+  ~~~
+  If you would like to use something else, you can use a language of your choice: it will not be
+  transformed to Rust:
+  ~~~
+  ```text
+  // content here
+  ```
+  ~~~
+
+## Minor changes
+
+- Bump `regex` from `1.1.6` to `1.3.7`.
+- Bump `toml` from `0.5.5` to `0.5.6`.
+- Add CI scripts and dependabot.
+- Binary dependencies are now optional if one is interested into only building the library.
+
 # 0.2.1
 
 > Wed August 7th 2019
