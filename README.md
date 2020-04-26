@@ -48,7 +48,7 @@ First, this tool will respect what you put in your `Cargo.toml`. There is a spec
 Once you have put the annotation in your *readme* file, just run the command without argument to
 perform the synchronization:
 
-```
+```text
 cargo sync-readme
 ```
 
@@ -88,7 +88,7 @@ a PR!
 This is likely to be the hidden documentation feature from `rustdoc`. To fix this problem,
 re-run with:
 
-```
+```text
 cargo sync-readme -z
 ```
 

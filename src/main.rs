@@ -46,7 +46,7 @@
 //! Once you have put the annotation in your *readme* file, just run the command without argument to
 //! perform the synchronization:
 //!
-//! ```
+//! ```text
 //! cargo sync-readme
 //! ```
 //!
@@ -86,7 +86,7 @@
 //! This is likely to be the hidden documentation feature from `rustdoc`. To fix this problem,
 //! re-run with:
 //!
-//! ```
+//! ```text
 //! cargo sync-readme -z
 //! ```
 
@@ -97,43 +97,39 @@ use std::process;
 use structopt::StructOpt;
 
 use cargo_sync_readme::{
-  Manifest, PreferDocFrom, extract_inner_doc, read_readme, transform_readme
+  extract_inner_doc, read_readme, transform_readme, Manifest, PreferDocFrom,
 };
 
 #[derive(Debug, StructOpt)]
 #[structopt(author)]
 enum CliOpt {
   #[structopt(
-    about = "Generate a Markdown section in your README based on your Rust documentation.",
+    about = "Generate a Markdown section in your README based on your Rust documentation."
   )]
   SyncReadme {
     #[structopt(
       short = "z",
       long,
-      help = "Show Rust hidden documentation lines in the generated README.",
+      help = "Show Rust hidden documentation lines in the generated README."
     )]
     show_hidden_doc: bool,
 
     #[structopt(
       short = "f",
       long,
-      help = "Set to either `bin` or `lib` to instruct sync-readme which file it should read documentation from.",
+      help = "Set to either `bin` or `lib` to instruct sync-readme which file it should read documentation from."
     )]
     prefer_doc_from: Option<PreferDocFrom>,
 
     #[structopt(
       long,
-      help = "Generate documentation with CRLF for Windows-style line endings. This will not affect the already present newlines.",
+      help = "Generate documentation with CRLF for Windows-style line endings. This will not affect the already present newlines."
     )]
     crlf: bool,
 
-    #[structopt(
-      short,
-      long,
-      help = "Check whether the README is synchronized.",
-    )]
+    #[structopt(short, long, help = "Check whether the README is synchronized.")]
     check: bool,
-  }
+  },
 }
 
 const CANNOT_FIND_ENTRY_POINT_ERR_STR: &str = "\
@@ -145,7 +141,12 @@ If you’re in the special situation where your crate defines both a binary and 
 consider using the -f option to hint sync-readme which file it should read the documentation from.";
 
 fn main() {
-  let CliOpt::SyncReadme { show_hidden_doc, prefer_doc_from, crlf, check } = CliOpt::from_args();
+  let CliOpt::SyncReadme {
+    show_hidden_doc,
+    prefer_doc_from,
+    crlf,
+    check,
+  } = CliOpt::from_args();
 
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
@@ -155,11 +156,8 @@ fn main() {
         if let Some(entry_point) = entry_point {
           let doc = extract_inner_doc(entry_point, show_hidden_doc, crlf);
           let readme_path = manifest.readme();
-          let transformation =
-              read_readme(&readme_path)
-                  .and_then(|readme|
-                      transform_readme(&readme, doc, crlf).map(|new| (readme, new))
-                  );
+          let transformation = read_readme(&readme_path)
+            .and_then(|readme| transform_readme(&readme, doc, crlf).map(|new| (readme, new)));
 
           match transformation {
             Ok((ref old_readme, ref new_readme)) if check => {
@@ -174,7 +172,7 @@ fn main() {
               let _ = file.write_all(new_readme.as_bytes());
             }
 
-            Err(e) => eprintln!("{}", e)
+            Err(e) => eprintln!("{}", e),
           }
         } else {
           eprintln!("{}", CANNOT_FIND_ENTRY_POINT_ERR_STR);
@@ -192,4 +190,3 @@ fn main() {
     process::exit(1);
   }
 }
-
