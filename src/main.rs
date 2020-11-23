@@ -74,6 +74,11 @@
 //!     it will generate newlines with CRLF.
 //!   - `-c --check`: check whether the *readme* is synchronized.
 //!
+//! ## Intra-link support
+//!
+//! This tool rewrites intra-links so they point at the corresponding place in [docs.rs](https://docs.rs).
+//! At this point only intra-links of the form `[⋯](crate::⋯)` are supported.
+//!
 //! ## Q/A and troubleshooting
 //!
 //! ### Are workspace crates supported?
@@ -142,13 +147,27 @@ fn main() {
   if let Ok(pwd) = current_dir() {
     match Manifest::find_manifest(pwd) {
       Ok(ref manifest) => {
+        let crate_name = match manifest.crate_name() {
+          None => {
+            eprintln!("Failed to get the name of the crate");
+            process::exit(1);
+          }
+          Some(name) => name,
+        };
         let entry_point = manifest.entry_point(prefer_doc_from);
 
         if let Some(entry_point) = entry_point {
-          let doc = extract_inner_doc(entry_point, show_hidden_doc, crlf);
+          let doc = extract_inner_doc(&entry_point, show_hidden_doc, crlf);
           let readme_path = manifest.readme();
-          let transformation = read_readme(&readme_path)
-            .and_then(|readme| transform_readme(&readme, doc, crlf).map(|new| (readme, new)));
+          let mut had_warnings = false;
+          let emit_warning = |msg: &str| {
+            eprintln!("warning: {}", msg);
+            had_warnings = true;
+          };
+          let transformation = read_readme(&readme_path).and_then(|readme| {
+            transform_readme(&readme, doc, crate_name, entry_point, crlf, emit_warning)
+              .map(|new| (readme, new))
+          });
 
           match transformation {
             Ok((ref old_readme, ref new_readme)) if check => {
@@ -161,6 +180,11 @@ fn main() {
             Ok((_, ref new_readme)) => {
               let mut file = File::create(readme_path).unwrap();
               let _ = file.write_all(new_readme.as_bytes());
+
+              if had_warnings {
+                // Use code 2 for warnings.
+                process::exit(2);
+              }
             }
 
             Err(e) => eprintln!("{}", e),

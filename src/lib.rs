@@ -1,6 +1,8 @@
 //! Library used to implement the cargo-sync-readme binary.
 
+use crate::intralinks::FQIdentifier;
 use regex::RegexBuilder;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{read_dir, File};
 use std::io::Read;
@@ -16,6 +18,8 @@ const MARKER_RE: &str = "^<!-- cargo-sync-readme -->\r?$";
 const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->\r?$";
 const MARKER_END_RE: &str = "^<!-- cargo-sync-readme end -->\r?$";
 const RUST_LANG_ANNOTATION: &str = "rust";
+
+pub mod intralinks;
 
 /// Common Markdown code-block state.
 ///
@@ -94,6 +98,15 @@ impl Manifest {
     } else {
       Err(FindManifestError::CannotFindManifest)
     }
+  }
+
+  /// Extract the path to the readme file from the manifest.
+  pub fn crate_name(&self) -> Option<&str> {
+    self
+      .toml
+      .get("package")
+      .and_then(|p| p.get("name"))
+      .and_then(Value::as_str)
   }
 
   /// Get the path to the file we want to take the documentation from.
@@ -238,9 +251,10 @@ where
   transform_inner_doc(&doc, show_hidden_doc, crlf)
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum TransformError {
   CannotReadReadme(PathBuf),
+  IntralinkError(intralinks::IntraLinkError),
   MissingOrIllFormatMarkers,
 }
 
@@ -250,10 +264,19 @@ impl fmt::Display for TransformError {
       TransformError::CannotReadReadme(ref path) => {
         write!(f, "Cannot read README at {}.", path.display())
       }
+      TransformError::IntralinkError(ref err) => {
+        write!(f, "Failed to process intra-links: {}", err)
+      }
       TransformError::MissingOrIllFormatMarkers => {
         f.write_str("Markers not found or ill-formed; check your file again.")
       }
     }
+  }
+}
+
+impl From<intralinks::IntraLinkError> for TransformError {
+  fn from(err: intralinks::IntraLinkError) -> Self {
+    TransformError::IntralinkError(err)
   }
 }
 
@@ -271,17 +294,27 @@ where
   Ok(content)
 }
 
-/// Transform a readme file and return its content with the documentation injected, if any.
-///
-/// Perform any required other transformations if asked by the user.
-pub fn transform_readme<C, R>(content: C, doc: R, crlf: bool) -> Result<String, TransformError>
-where
-  C: AsRef<str>,
-  R: AsRef<str>,
-{
-  let content = content.as_ref();
-  let doc = doc.as_ref();
+fn transform_doc_intralinks(
+  doc: &str,
+  crate_name: &str,
+  entry_point: &Path,
+  emit_warning: impl FnMut(&str),
+) -> Result<String, TransformError> {
+  let symbols: HashSet<FQIdentifier> = intralinks::extract_markdown_intralink_symbols(doc);
+  let modules = intralinks::all_supermodules(symbols.iter());
+  let symbols_type =
+    intralinks::crate_symbols_type(&entry_point, |module| modules.contains(module))?;
 
+  Ok(intralinks::rewrite_markdown_links(
+    doc,
+    &symbols_type,
+    crate_name,
+    emit_warning,
+  ))
+}
+
+fn inject_doc_in_readme(content: &str, doc: &str, crlf: bool) -> Result<String, TransformError> {
+  let content = content.as_ref();
   let mut marker_re_builder = RegexBuilder::new(MARKER_RE);
   marker_re_builder.multi_line(true);
   let marker_re = marker_re_builder.build().unwrap();
@@ -323,6 +356,33 @@ where
       _ => Err(TransformError::MissingOrIllFormatMarkers),
     }
   }
+}
+
+/// Transform a readme file and return its content with the documentation injected, if any.
+///
+/// Perform any required other transformations if asked by the user.
+pub fn transform_readme<C, R, N, E>(
+  content: C,
+  doc: R,
+  crate_name: N,
+  entry_point: E,
+  crlf: bool,
+  emit_warning: impl FnMut(&str),
+) -> Result<String, TransformError>
+where
+  C: AsRef<str>,
+  R: AsRef<str>,
+  N: AsRef<str>,
+  E: AsRef<Path>,
+{
+  let doc = transform_doc_intralinks(
+    doc.as_ref(),
+    crate_name.as_ref(),
+    entry_point.as_ref(),
+    emit_warning,
+  )?;
+
+  inject_doc_in_readme(content.as_ref(), &doc, crlf)
 }
 
 // Reformat the README by inserting the documentation between the start and end markers.
@@ -447,18 +507,21 @@ mod tests {
   fn simple_transform() {
     let doc = "Test! <3";
     let readme = "Foo\n<!-- cargo-sync-readme -->\nbar\nzoo";
-    let output = transform_readme(readme, doc, false);
+    let output = inject_doc_in_readme(readme, doc, false);
 
-    assert_eq!(output, Ok("Foo\n<!-- cargo-sync-readme start -->\n\nTest! <3\n<!-- cargo-sync-readme end -->\nbar\nzoo".to_owned()));
+    assert_eq!(
+      output.ok().unwrap(),
+      "Foo\n<!-- cargo-sync-readme start -->\n\nTest! <3\n<!-- cargo-sync-readme end -->\nbar\nzoo"
+    );
   }
 
   #[test]
   fn windows_line_endings() {
     let doc = "Test! <3";
     let readme = "Foo\r\n<!-- cargo-sync-readme -->\r\nbar\r\nzoo";
-    let output = transform_readme(readme, doc, true);
+    let output = inject_doc_in_readme(readme, doc, true);
 
-    assert_eq!(output, Ok("Foo\r\n<!-- cargo-sync-readme start -->\r\n\r\nTest! <3\r\n<!-- cargo-sync-readme end -->\r\nbar\r\nzoo".to_owned()));
+    assert_eq!(output.ok().unwrap(), "Foo\r\n<!-- cargo-sync-readme start -->\r\n\r\nTest! <3\r\n<!-- cargo-sync-readme end -->\r\nbar\r\nzoo");
   }
 
   #[test]

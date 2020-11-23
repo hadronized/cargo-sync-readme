@@ -76,6 +76,11 @@ Disneyland Parc experience, but less exciting).
     it will generate newlines with CRLF.
   - `-c --check`: check whether the *readme* is synchronized.
 
+## Intra-link support
+
+This tool rewrites intra-links so they point at the corresponding place in [docs.rs](https://docs.rs).
+At this point only intra-links of the form `[⋯](crate::⋯)` are supported.
+
 ## Q/A and troubleshooting
 
 ### Are workspace crates supported?
