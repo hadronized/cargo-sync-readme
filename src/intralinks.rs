@@ -12,7 +12,7 @@ use syn::Item;
 pub enum IntraLinkError {
   IOError(std::io::Error),
   ParseError(syn::Error),
-  NoModuleFile(String, PathBuf),
+  LoadStdLibError(String),
 }
 
 impl fmt::Display for IntraLinkError {
@@ -20,11 +20,7 @@ impl fmt::Display for IntraLinkError {
     match self {
       IntraLinkError::IOError(err) => write!(f, "IO error: {}", err),
       IntraLinkError::ParseError(err) => write!(f, "Failed to parse rust file: {}", err),
-      IntraLinkError::NoModuleFile(module, dir) => write!(
-        f,
-        "Unable to find module file for module {} in directory {:?}",
-        module, dir
-      ),
+      IntraLinkError::LoadStdLibError(msg) => write!(f, "Failed to load standard library: {}", msg),
     }
   }
 }
@@ -88,6 +84,10 @@ impl FQIdentifier {
       path_shared: Rc::new(Vec::new()),
       path_end: 0,
     }
+  }
+
+  fn root(crate_name: &str) -> FQIdentifier {
+    FQIdentifier::new(FQIdentifierAnchor::Root).join(crate_name)
   }
 
   fn from_string(s: &str) -> Option<FQIdentifier> {
@@ -191,6 +191,7 @@ fn traverse_module(
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<(), IntraLinkError> {
   if !explore_module(&mod_symbol) {
     return Ok(());
@@ -200,23 +201,32 @@ fn traverse_module(
 
   for item in ast.iter() {
     if let Item::Mod(module) = item {
-      let module_symbol: FQIdentifier = mod_symbol.clone().join(&module.ident.to_string());
+      let child_module_symbol: FQIdentifier = mod_symbol.clone().join(&module.ident.to_string());
 
       match &module.content {
         Some((_, items)) => {
-          traverse_module(&items, dir, module_symbol, asts, explore_module)?;
+          traverse_module(
+            &items,
+            dir,
+            child_module_symbol,
+            asts,
+            explore_module,
+            emit_warning,
+          )?;
         }
-        None if explore_module(&module_symbol) => {
-          let mod_filename = match module_filename(dir, &module.ident) {
-            None => Err(IntraLinkError::NoModuleFile(
-              module.ident.to_string(),
-              dir.to_path_buf(),
-            )),
-            Some(f) => Ok(f),
-          }?;
-
-          traverse_file(mod_filename, module_symbol, asts, explore_module)?;
-        }
+        None if explore_module(&child_module_symbol) => match module_filename(dir, &module.ident) {
+          None => emit_warning(&format!(
+            "Unable to find module file for module {} in directory {:?}",
+            child_module_symbol, dir
+          )),
+          Some(mod_filename) => traverse_file(
+            mod_filename,
+            child_module_symbol,
+            asts,
+            explore_module,
+            emit_warning,
+          )?,
+        },
         None => (),
       }
     }
@@ -230,6 +240,7 @@ fn traverse_file<P: AsRef<Path>>(
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<(), IntraLinkError> {
   let dir: &Path = file.as_ref().parent().expect(&format!(
     "failed to get directory of \"{:?}\"",
@@ -237,7 +248,14 @@ fn traverse_file<P: AsRef<Path>>(
   ));
   let ast: syn::File = file_ast(&file)?;
 
-  traverse_module(&ast.items, dir, mod_symbol, asts, explore_module)
+  traverse_module(
+    &ast.items,
+    dir,
+    mod_symbol,
+    asts,
+    explore_module,
+    emit_warning,
+  )
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -321,14 +339,27 @@ fn symbols_type(asts: &HashMap<FQIdentifier, Vec<Item>>) -> HashMap<FQIdentifier
 pub fn crate_symbols_type<P: AsRef<Path>>(
   entry_point: P,
   explore_module: impl Fn(&FQIdentifier) -> bool,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<HashMap<FQIdentifier, SymbolType>, IntraLinkError> {
   let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+  let std_lib_crates = get_standard_libraries()?;
+
+  for Crate { name, entrypoint } in std_lib_crates {
+    traverse_file(
+      entrypoint,
+      FQIdentifier::root(&name),
+      &mut asts,
+      &explore_module,
+      emit_warning,
+    )?;
+  }
 
   traverse_file(
     entry_point,
     FQIdentifier::new(FQIdentifierAnchor::Crate),
     &mut asts,
     &explore_module,
+    emit_warning,
   )?;
 
   Ok(symbols_type(&asts))
@@ -478,9 +509,7 @@ pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
       let (link, _) = split_link_fragment(link);
 
       if let Some(symbol) = FQIdentifier::from_string(&link) {
-        if let FQIdentifierAnchor::Crate = symbol.anchor {
-          symbols.insert(symbol);
-        }
+        symbols.insert(symbol);
       }
     }
   }
@@ -489,7 +518,10 @@ pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
 }
 
 fn documentation_url(symbol: &FQIdentifier, typ: SymbolType, crate_name: &str) -> String {
-  let mut link = format!("https://docs.rs/{}/latest/{}/", crate_name, crate_name);
+  let mut link = match symbol.anchor {
+    FQIdentifierAnchor::Root => format!("https://doc.rust-lang.org/stable/"),
+    FQIdentifierAnchor::Crate => format!("https://docs.rs/{}/latest/{}/", crate_name, crate_name),
+  };
 
   if SymbolType::Crate == typ {
     return link;
@@ -555,17 +587,7 @@ pub fn rewrite_markdown_links(
           }
           r => {
             if let Some(symbol) = r {
-              match symbol.anchor {
-                FQIdentifierAnchor::Root => {
-                  emit_warning(&format!(
-                    "Absolute intra-links are not yet supported.  Skipping `{}`.",
-                    symbol
-                  ));
-                }
-                FQIdentifierAnchor::Crate => {
-                  emit_warning(&format!("Could not find `{}` in the code.", symbol));
-                }
-              }
+              emit_warning(&format!("Could not find definition of `{}`.", symbol));
             }
 
             new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
@@ -580,6 +602,76 @@ pub fn rewrite_markdown_links(
   new_doc.push_str(&doc[last_span.end..]);
 
   new_doc
+}
+
+fn get_rustc_sysroot_libraries_dir() -> Result<PathBuf, IntraLinkError> {
+  use std::process::*;
+
+  let output = Command::new("rustc")
+    .args(&["--print=sysroot"])
+    .output()
+    .map_err(|e| IntraLinkError::LoadStdLibError(format!("failed to run rustc: {}", e)))?;
+
+  let s = String::from_utf8(output.stdout).expect("unexpected output from rustc");
+  let sysroot = PathBuf::from(s.trim());
+  let src_path = sysroot
+    .join("lib")
+    .join("rustlib")
+    .join("src")
+    .join("rust")
+    .join("library");
+
+  match src_path.is_dir() {
+    false => Err(IntraLinkError::LoadStdLibError(format!(
+      "\"{:?}\" is not a directory",
+      src_path
+    ))),
+    true => Ok(src_path),
+  }
+}
+
+#[derive(Debug)]
+struct Crate {
+  name: String,
+  entrypoint: PathBuf,
+}
+
+fn get_standard_libraries() -> Result<Vec<Crate>, IntraLinkError> {
+  let libraries_dir = get_rustc_sysroot_libraries_dir()?;
+  let mut std_libs = Vec::with_capacity(32);
+
+  for entry in std::fs::read_dir(&libraries_dir)? {
+    let entry = entry?;
+    let path = entry.path();
+    let cargo_manifest = path.join("Cargo.toml");
+    let lib_entrypoint = path.join("src").join("lib.rs");
+
+    if cargo_manifest.is_file() && lib_entrypoint.is_file() {
+      let crate_name = super::Manifest::load(&cargo_manifest)
+        .map_err(|e| {
+          IntraLinkError::LoadStdLibError(format!(
+            "failed to load manifest in \"{:?}\": {}",
+            cargo_manifest, e
+          ))
+        })?
+        .crate_name()
+        .ok_or_else(|| {
+          IntraLinkError::LoadStdLibError(format!(
+            "cannot get crate name from \"{:?}\"",
+            cargo_manifest
+          ))
+        })?
+        .to_owned();
+      let crate_info = Crate {
+        name: crate_name.to_owned(),
+        entrypoint: lib_entrypoint,
+      };
+
+      std_libs.push(crate_info);
+    }
+  }
+
+  Ok(std_libs)
 }
 
 #[cfg(test)]
@@ -772,6 +864,7 @@ mod tests {
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|m| *m != module_skip,
+      &mut |_| (),
     )
     .ok()
     .unwrap();
@@ -836,6 +929,7 @@ mod tests {
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|module| modules.contains(module),
+      &mut |_| (),
     )
     .ok()
     .unwrap();
@@ -889,7 +983,8 @@ mod tests {
         This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
         other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        Go ahead and check all the [structs in foo](crate::foo#structs)
+        Go ahead and check all the [structs in foo](crate::foo#structs).
+        Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
         ";
 
     let symbols = extract_markdown_intralink_symbols(doc);
@@ -898,6 +993,8 @@ mod tests {
       FQIdentifier::from_string("crate").unwrap(),
       FQIdentifier::from_string("crate::amodule").unwrap(),
       FQIdentifier::from_string("crate::foo").unwrap(),
+      FQIdentifier::from_string("::std::sync::Arc").unwrap(),
+      FQIdentifier::from_string("::alloc::sync::Arc").unwrap(),
     ]
     .iter()
     .cloned()
