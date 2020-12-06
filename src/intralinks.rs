@@ -338,18 +338,24 @@ fn symbols_type(asts: &HashMap<FQIdentifier, Vec<Item>>) -> HashMap<FQIdentifier
 
 pub fn crate_symbols_type<P: AsRef<Path>>(
   entry_point: P,
-  explore_module: impl Fn(&FQIdentifier) -> bool,
+  symbols: &HashSet<FQIdentifier>,
   emit_warning: &mut impl FnMut(&str),
 ) -> Result<HashMap<FQIdentifier, SymbolType>, IntraLinkError> {
+  let modules = all_supermodules(symbols.iter());
   let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
-  let std_lib_crates = get_standard_libraries()?;
+
+  // Only load standard library information if needed.
+  let std_lib_crates = match references_standard_library(&symbols) {
+    true => get_standard_libraries()?,
+    false => Vec::new(),
+  };
 
   for Crate { name, entrypoint } in std_lib_crates {
     traverse_file(
       entrypoint,
       FQIdentifier::root(&name),
       &mut asts,
-      &explore_module,
+      &|module| modules.contains(module),
       emit_warning,
     )?;
   }
@@ -358,7 +364,7 @@ pub fn crate_symbols_type<P: AsRef<Path>>(
     entry_point,
     FQIdentifier::new(FQIdentifierAnchor::Crate),
     &mut asts,
-    &explore_module,
+    &|module| modules.contains(module),
     emit_warning,
   )?;
 
@@ -368,9 +374,7 @@ pub fn crate_symbols_type<P: AsRef<Path>>(
 /// Create a set with all supermodules in `symbols`.  For instance, if `symbols` is
 /// `{crate::foo::bar::baz, crate::baz::mumble}` it will return
 /// `{crate, crate::foo, crate::foo::bar, crate::baz}`.
-pub fn all_supermodules<'a>(
-  symbols: impl Iterator<Item = &'a FQIdentifier>,
-) -> HashSet<FQIdentifier> {
+fn all_supermodules<'a>(symbols: impl Iterator<Item = &'a FQIdentifier>) -> HashSet<FQIdentifier> {
   symbols
     .into_iter()
     .flat_map(|s| s.all_ancestors())
@@ -634,6 +638,13 @@ fn get_rustc_sysroot_libraries_dir() -> Result<PathBuf, IntraLinkError> {
 struct Crate {
   name: String,
   entrypoint: PathBuf,
+}
+
+fn references_standard_library(symbols: &HashSet<FQIdentifier>) -> bool {
+  // The only way to reference standard libraries that we support is with a intra-link of form `::⋯`.
+  symbols
+    .iter()
+    .any(|symbol| symbol.anchor == FQIdentifierAnchor::Root)
 }
 
 fn get_standard_libraries() -> Result<Vec<Crate>, IntraLinkError> {

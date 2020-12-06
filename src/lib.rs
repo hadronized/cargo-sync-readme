@@ -312,12 +312,7 @@ fn transform_doc_intralinks(
   mut emit_warning: impl FnMut(&str),
 ) -> Result<String, TransformError> {
   let symbols: HashSet<FQIdentifier> = intralinks::extract_markdown_intralink_symbols(doc);
-  let modules = intralinks::all_supermodules(symbols.iter());
-  let symbols_type = intralinks::crate_symbols_type(
-    &entry_point,
-    |module| modules.contains(module),
-    &mut emit_warning,
-  )?;
+  let symbols_type = intralinks::crate_symbols_type(&entry_point, &symbols, &mut emit_warning)?;
 
   Ok(intralinks::rewrite_markdown_links(
     doc,
