@@ -203,7 +203,20 @@ fn traverse_module(
     return Ok(());
   }
 
-  asts.insert(mod_symbol.clone(), ast.clone());
+  // Conditional compilation can create multiple module definitions, e.g.
+  //
+  // ```
+  // #[cfg(foo)]
+  // mod a {}
+  // #[cfg(not(foo))]
+  // mod a {}
+  // ```
+  //
+  // We choose to consider the first one only.
+  match asts.contains_key(&mod_symbol) {
+    true => return Ok(()),
+    false => asts.insert(mod_symbol.clone(), ast.clone()),
+  };
 
   for item in ast.iter() {
     if let Item::Mod(module) = item {
@@ -987,6 +1000,55 @@ mod tests {
       ),
       (
         FQIdentifier::from_string("crate::b::MyStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    assert_eq!(symbols_type, expected)
+  }
+
+  #[test]
+  fn test_symbols_type_multiple_module_first_wins() {
+    let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+
+    let source = "
+        #[cfg(not(foo))]
+        mod a {
+          struct MyStruct {}
+        }
+
+        #[cfg(foo)]
+        mod a {
+          struct Skip {}
+        }
+        ";
+
+    traverse_module(
+      &syn::parse_file(&source).unwrap().items,
+      &PathBuf::new(),
+      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      &mut asts,
+      &|_| true,
+      &mut |_| (),
+    )
+    .ok()
+    .unwrap();
+
+    let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
+    let expected: HashMap<FQIdentifier, SymbolType> = [
+      (
+        FQIdentifier::from_string("crate").unwrap(),
+        SymbolType::Crate,
+      ),
+      (
+        FQIdentifier::from_string("crate::a").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
         SymbolType::Struct,
       ),
     ]
