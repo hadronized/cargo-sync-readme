@@ -185,6 +185,12 @@ impl Debug for FQIdentifier {
   }
 }
 
+fn is_cfg_test(attribute: &syn::Attribute) -> bool {
+  let test_attribute: syn::Attribute = syn::parse_quote!(#[cfg(test)]);
+
+  attribute == &test_attribute
+}
+
 fn traverse_module(
   ast: &Vec<Item>,
   dir: &Path,
@@ -201,6 +207,12 @@ fn traverse_module(
 
   for item in ast.iter() {
     if let Item::Mod(module) = item {
+      // If a module is gated by `#[cfg(test)]` we skip it.  This happens sometimes in the
+      // standard library, and we want to explore the correct, non-test, module.
+      if module.attrs.iter().any(is_cfg_test) {
+        continue;
+      }
+
       let child_module_symbol: FQIdentifier = mod_symbol.clone().join(&module.ident.to_string());
 
       match &module.content {
@@ -908,6 +920,73 @@ mod tests {
       ),
       (
         FQIdentifier::from_string("crate::a::FooStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    assert_eq!(symbols_type, expected)
+  }
+
+  #[test]
+  fn test_symbols_type_with_mod_under_cfg_test() {
+    let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+
+    let source = "
+        #[cfg(not(test))]
+        mod a {
+          struct MyStruct {}
+        }
+
+        #[cfg(test)]
+        mod a {
+          struct MyStructTest {}
+        }
+
+        #[cfg(test)]
+        mod b {
+          struct MyStructTest {}
+        }
+
+        #[cfg(not(test))]
+        mod b {
+          struct MyStruct {}
+        }
+        ";
+
+    traverse_module(
+      &syn::parse_file(&source).unwrap().items,
+      &PathBuf::new(),
+      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      &mut asts,
+      &|_| true,
+      &mut |_| (),
+    )
+    .ok()
+    .unwrap();
+
+    let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
+    let expected: HashMap<FQIdentifier, SymbolType> = [
+      (
+        FQIdentifier::from_string("crate").unwrap(),
+        SymbolType::Crate,
+      ),
+      (
+        FQIdentifier::from_string("crate::a").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+      (
+        FQIdentifier::from_string("crate::b").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::b::MyStruct").unwrap(),
         SymbolType::Struct,
       ),
     ]
