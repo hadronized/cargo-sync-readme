@@ -396,7 +396,7 @@ fn strip_hidden_doc_tests(st: &mut CodeBlockState, line: &str) -> bool {
     CodeBlockState::InWithTildes => {
       // we’re in a code-block, so filter only lines starting with a dash (#) and let others
       // go through; close the code-block if we find three tildes (~~~)
-      if line.starts_with("# ") {
+      if line.starts_with("# ") || line.trim_end() == "#" {
         false
       } else {
         if line.starts_with("~~~") {
@@ -410,7 +410,7 @@ fn strip_hidden_doc_tests(st: &mut CodeBlockState, line: &str) -> bool {
     CodeBlockState::InWithBackticks => {
       // we’re in a code-block, so filter only lines starting with a dash (#) and let others
       // go through; close the code-block if we find three backticks (```)
-      if line.starts_with("# ") {
+      if line.starts_with("# ") || line.trim_end() == "#" {
         false
       } else {
         if line.starts_with("```") {
@@ -435,7 +435,8 @@ mod tests {
     assert_eq!(strip_hidden_doc_tests(&mut st, "```"), true);
     assert_eq!(strip_hidden_doc_tests(&mut st, "foo bar zoo"), true);
     assert_eq!(strip_hidden_doc_tests(&mut st, "# hello"), false);
-    assert_eq!(strip_hidden_doc_tests(&mut st, "#"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "#foo"), true);
+    assert_eq!(strip_hidden_doc_tests(&mut st, "#"), false);
     assert_eq!(strip_hidden_doc_tests(&mut st, "# "), false);
     assert_eq!(strip_hidden_doc_tests(&mut st, "# ### nope"), false);
     assert_eq!(strip_hidden_doc_tests(&mut st, "~~~"), true);
