@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use syn::export::fmt::Display;
@@ -407,35 +408,70 @@ fn all_supermodules<'a>(symbols: impl Iterator<Item = &'a FQIdentifier>) -> Hash
 }
 
 #[derive(Eq, PartialEq, Debug)]
-enum MarkdownLink<'a> {
-  /// Links like [ref], or [text][ref].
-  Ref {
-    text: Option<&'a str>,
-    reference: &'a str,
-  },
-  /// Links like [text](link).
-  Inline { text: &'a str, link: &'a str },
+struct MarkdownInlineLink {
+  text: String,
+  link: String,
 }
 
-fn split_link_fragment<'a>(link: &'a str) -> (&'a str, &'a str) {
+fn split_link_fragment(link: &str) -> (&str, &str) {
   match link.find('#') {
     None => (link, ""),
     Some(i) => link.split_at(i),
   }
 }
 
-struct MarkdownLinkIterator<'a> {
+fn markdown_inline_link_iterator<'a>(
   source: &'a str,
-  iter: std::iter::Enumerate<std::str::Bytes<'a>>,
-}
+) -> impl Iterator<Item = (Span, MarkdownInlineLink)> + 'a {
+  use pulldown_cmark::*;
 
-impl<'a> MarkdownLinkIterator<'a> {
-  fn new(source: &'a str) -> MarkdownLinkIterator<'a> {
-    MarkdownLinkIterator {
-      source,
-      iter: source.bytes().enumerate(),
+  fn escape_markdown(str: &str, escape_chars: &str) -> String {
+    let mut s = String::new();
+
+    for c in str.chars() {
+      match escape_chars.contains(c) {
+        true => {
+          s.push('\\');
+          s.push(c);
+        }
+        false => s.push(c),
+      }
     }
+
+    s
   }
+
+  let parser = Parser::new_ext(source, Options::all());
+  let mut in_link = false;
+  let mut text = String::new();
+
+  parser
+    .into_offset_iter()
+    .filter_map(move |(event, range)| match event {
+      Event::Start(Tag::Link(LinkType::Inline, ..)) => {
+        in_link = true;
+        None
+      }
+      Event::End(Tag::Link(LinkType::Inline, link, ..)) => {
+        in_link = false;
+
+        let t: String = escape_markdown(&std::mem::take(&mut text), r"\[]");
+        let l: String = escape_markdown(link.as_ref(), r"\()");
+
+        Some((range.into(), MarkdownInlineLink { text: t, link: l }))
+      }
+      Event::Text(s) if in_link => {
+        text.push_str(&s);
+        None
+      }
+      Event::Code(s) if in_link => {
+        text.push('`');
+        text.push_str(&s);
+        text.push('`');
+        None
+      }
+      _ => None,
+    })
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -444,102 +480,23 @@ pub struct Span {
   pub end: usize,
 }
 
-impl<'a> Iterator for MarkdownLinkIterator<'a> {
-  type Item = (Span, MarkdownLink<'a>);
-
-  fn next(&mut self) -> Option<Self::Item> {
-    let mut escape = 0;
-    let mut state = 0;
-    let mut nest_level = 0;
-    let mut start: Option<usize> = None;
-    let mut first_component: Option<&str> = None;
-
-    // This works well with UTF-8 because we just look for symbols that are ASCII, which means
-    // they start with a 0 bit.  In UTF-8 codepoints that start with a 0 bit are ASCII codepoints,
-    // which means that when we match some specific char in the loop below we actually know for
-    // sure we are dealing with the right symbol.
-
-    while let Some((i, c)) = self.iter.next() {
-      match c {
-        _ if escape > 0 => escape -= 1,
-        b'\\' => escape = 1,
-
-        b'[' if state == 0 => {
-          state = 1;
-          start = Some(i);
-        }
-
-        b'[' if state == 1 => nest_level += 1,
-        b']' if state == 1 && nest_level > 0 => nest_level -= 1,
-        b']' if state == 1 => {
-          state = 2;
-          first_component = Some(&self.source[start.unwrap() + 1..i]);
-        }
-
-        b'(' if state == 2 => state = 3,
-        b'[' if state == 2 => state = 4,
-        _ if state == 2 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i,
-          };
-          return Some((
-            span,
-            MarkdownLink::Ref {
-              text: None,
-              reference: first_component.unwrap(),
-            },
-          ));
-        }
-
-        b'(' if state == 3 => nest_level += 1,
-        b')' if state == 3 && nest_level > 0 => nest_level -= 1,
-        b')' if state == 3 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i + 1,
-          };
-          let text = first_component.unwrap();
-          let link = &self.source[start.unwrap() + text.len() + 3..i];
-          return Some((span, MarkdownLink::Inline { text, link }));
-        }
-
-        b'[' if state == 4 => nest_level += 1,
-        b']' if state == 4 && nest_level > 0 => nest_level -= 1,
-        b']' if state == 4 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i + 1,
-          };
-          let text = first_component.unwrap();
-          let reference = &self.source[start.unwrap() + text.len() + 3..i];
-          return Some((
-            span,
-            MarkdownLink::Ref {
-              text: Some(text),
-              reference,
-            },
-          ));
-        }
-
-        _ => (),
-      }
+impl From<Range<usize>> for Span {
+  fn from(range: Range<usize>) -> Self {
+    Span {
+      start: range.start,
+      end: range.end,
     }
-
-    None
   }
 }
 
 pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
   let mut symbols = HashSet::new();
 
-  for (_, link) in MarkdownLinkIterator::new(doc) {
-    if let MarkdownLink::Inline { link, .. } = link {
-      let (link, _) = split_link_fragment(link);
+  for (_, MarkdownInlineLink { link, .. }) in markdown_inline_link_iterator(doc) {
+    let (link, _) = split_link_fragment(&link);
 
-      if let Some(symbol) = FQIdentifier::from_string(&link) {
-        symbols.insert(symbol);
-      }
+    if let Some(symbol) = FQIdentifier::from_string(&link) {
+      symbols.insert(symbol);
     }
   }
 
@@ -592,36 +549,25 @@ pub fn rewrite_markdown_links(
   let mut new_doc = String::with_capacity(doc.len());
   let mut last_span = Span { start: 0, end: 0 };
 
-  for (span, link) in MarkdownLinkIterator::new(doc) {
+  for (span, link) in markdown_inline_link_iterator(doc) {
     new_doc.push_str(&doc[last_span.end..span.start]);
 
-    match link {
-      MarkdownLink::Ref {
-        text: None,
-        reference,
-      } => new_doc.push_str(&format!("[{}]", reference)),
-      MarkdownLink::Ref {
-        text: Some(t),
-        reference,
-      } => new_doc.push_str(&format!("[{}][{}]", t, reference)),
-      MarkdownLink::Inline { text, link } => {
-        let (link, fragment): (&str, &str) = split_link_fragment(link);
+    let MarkdownInlineLink { text, link } = link;
+    let (link, fragment): (&str, &str) = split_link_fragment(&link);
 
-        match FQIdentifier::from_string(&link) {
-          Some(symbol) if symbols_type.contains_key(&symbol) => {
-            let typ = symbols_type[&symbol];
-            let new_link = documentation_url(&symbol, typ, crate_name);
+    match FQIdentifier::from_string(&link) {
+      Some(symbol) if symbols_type.contains_key(&symbol) => {
+        let typ = symbols_type[&symbol];
+        let new_link = documentation_url(&symbol, typ, crate_name);
 
-            new_doc.push_str(&format!("[{}]({}{})", text, new_link, fragment));
-          }
-          r => {
-            if let Some(symbol) = r {
-              emit_warning(&format!("Could not find definition of `{}`.", symbol));
-            }
-
-            new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
-          }
+        new_doc.push_str(&format!("[{}]({}{})", text, new_link, fragment));
+      }
+      r => {
+        if let Some(symbol) = r {
+          emit_warning(&format!("Could not find definition of `{}`.", symbol));
         }
+
+        new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
       }
     }
 
@@ -718,86 +664,43 @@ mod tests {
   fn test_markdown_link_iterator() {
     let markdown = "A [some text] [another](http://foo.com), [another][one]";
 
-    let mut iter = MarkdownLinkIterator::new(&markdown);
-
+    let mut iter = markdown_inline_link_iterator(&markdown);
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some text"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some text]");
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
     assert_eq!(&markdown[start..end], "[another](http://foo.com)");
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: Some(&"another"),
-        reference: &"one"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another][one]");
 
     assert_eq!(iter.next(), None);
 
     let markdown = "[another](http://foo.com)[another][one]";
-
-    let mut iter = MarkdownLinkIterator::new(&markdown);
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
     assert_eq!(&markdown[start..end], "[another](http://foo.com)");
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: Some(&"another"),
-        reference: &"one"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another][one]");
-
     assert_eq!(iter.next(), None);
 
     let markdown = "A [some [text]], [another [text] (foo)](http://foo.com/foo(bar)), [another [] one][foo[]bar]";
-
-    let mut iter = MarkdownLinkIterator::new(&markdown);
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some [text]"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some [text]]");
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Inline {
-        text: &"another [text] (foo)",
-        link: &"http://foo.com/foo(bar)"
+      MarkdownInlineLink {
+        text: r"another \[text\] (foo)".to_owned(),
+        link: r"http://foo.com/foo\(bar\)".to_owned(),
       }
     );
     assert_eq!(
@@ -805,51 +708,45 @@ mod tests {
       "[another [text] (foo)](http://foo.com/foo(bar))"
     );
 
+    assert_eq!(iter.next(), None);
+
+    let markdown = "A [some \\]text], [another](http://foo.\\(com\\)), [another\\]][one\\]]";
+    let mut iter = markdown_inline_link_iterator(&markdown);
+
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: Some(&"another [] one"),
-        reference: &"foo[]bar"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: r"http://foo.\(com\)".to_owned(),
       }
     );
-    assert_eq!(&markdown[start..end], "[another [] one][foo[]bar]");
+    assert_eq!(&markdown[start..end], r"[another](http://foo.\(com\))");
 
     assert_eq!(iter.next(), None);
 
-    let markdown = "A [some \\]text], [another](http://foo.com\\)), [another\\]][one\\]]";
+    let markdown = "A `this is no link [link](http://foo.com)`";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
-    let mut iter = MarkdownLinkIterator::new(&markdown);
+    assert_eq!(iter.next(), None);
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some \\]text"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some \\]text]");
+    let markdown = "A\n```\nthis is no link [link](http://foo.com)\n```";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com\\)"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another](http://foo.com\\))");
+    assert_eq!(iter.next(), None);
+
+    let markdown = "A [link with `code`!](http://foo.com)!";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: Some(&"another\\]"),
-        reference: &"one\\]"
+      MarkdownInlineLink {
+        text: "link with `code`!".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
-    assert_eq!(&markdown[start..end], "[another\\]][one\\]]");
+    assert_eq!(&markdown[start..end], "[link with `code`!](http://foo.com)");
 
     assert_eq!(iter.next(), None);
   }
@@ -1130,14 +1027,14 @@ mod tests {
   #[test]
   fn test_extract_markdown_intralink_symbols() {
     let doc = "
-        # Foobini
+# Foobini
 
-        This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        Go ahead and check all the [structs in foo](crate::foo#structs).
-        Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
-        ";
+Go ahead and check all the [structs in foo](crate::foo#structs).
+Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
+";
 
     let symbols = extract_markdown_intralink_symbols(doc);
 
@@ -1157,17 +1054,18 @@ mod tests {
 
   #[test]
   fn test_rewrite_markdown_links() {
-    let doc = "
-        # Foobini
+    let doc = r"
+# Foobini
 
-        This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        This link is [broken](crate::broken) and this is [not supported](::foo::bar).
+This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this
+should [wor\\k \[fi\]le](f\\i\(n\)e).
 
-        Go ahead and check all the [structs in foo](crate::foo#structs) specifically
-        [this one](crate::foo::BestStruct)
-        ";
+Go ahead and check all the [structs in foo](crate::foo#structs) specifically
+[this one](crate::foo::BestStruct)
+";
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = [
       (
@@ -1192,17 +1090,18 @@ mod tests {
     .collect();
 
     let new_readme = rewrite_markdown_links(&doc, &symbols_type, "foobini", |_| ());
-    let expected = "
-        # Foobini
+    let expected = r"
+# Foobini
 
-        This [this crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        This link is [broken](crate::broken) and this is [not supported](::foo::bar).
+This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this
+should [wor\\k \[fi\]le](f\\i\(n\)e).
 
-        Go ahead and check all the [structs in foo](https://docs.rs/foobini/latest/foobini/foo/#structs) specifically
-        [this one](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
-        ";
+Go ahead and check all the [structs in foo](https://docs.rs/foobini/latest/foobini/foo/#structs) specifically
+[this one](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
+";
 
     assert_eq!(new_readme, expected);
   }
