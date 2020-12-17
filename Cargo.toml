@@ -25,5 +25,5 @@ required-features = ["cli"]
 regex = "1.3"
 structopt = { version = "0.3", optional = true }
 toml = "0.5"
-syn = "1.0.50"
+syn = "1.0.54"
 itertools = "0.9.0"
