@@ -1,11 +1,11 @@
+//! Tooling to manipulate intralinks by parsing Rust code.
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use syn::export::fmt::Display;
-use syn::export::{Debug, Formatter};
 use syn::Ident;
 use syn::Item;
 
@@ -68,7 +68,7 @@ pub enum FQIdentifierAnchor {
 }
 
 /// Fully qualified identifier.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FQIdentifier {
   pub anchor: FQIdentifierAnchor,
 
@@ -164,8 +164,8 @@ impl Hash for FQIdentifier {
   }
 }
 
-impl Display for FQIdentifier {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FQIdentifier {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
     match self.anchor {
       FQIdentifierAnchor::Root => (),
       FQIdentifierAnchor::Crate => f.write_str("crate")?,
@@ -180,16 +180,10 @@ impl Display for FQIdentifier {
   }
 }
 
-impl Debug for FQIdentifier {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    Display::fmt(self, f)
-  }
-}
-
 fn is_cfg_test(attribute: &syn::Attribute) -> bool {
   let test_attribute: syn::Attribute = syn::parse_quote!(#[cfg(test)]);
 
-  attribute == &test_attribute
+  *attribute == test_attribute
 }
 
 fn traverse_module(
