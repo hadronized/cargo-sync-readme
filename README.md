@@ -78,8 +78,17 @@ Disneyland Parc experience, but less exciting).
 
 ## Intra-link support
 
-This tool rewrites intra-links so they point at the corresponding place in [docs.rs](https://docs.rs).
-At this point only intra-links of the form `[⋯](crate::⋯)` are supported.
+This tool rewrites intra-links so they point at the corresponding place in
+[docs.rs](https://docs.rs).  The intra-links of must be of the form `[⋯](crate::⋯)`.
+
+Links to the standard library are also supported, and they must be of the form
+`[⋯](::<crate>::⋯)`, where `<crate>` is a crate that is part of the standard library, such as
+`std`, `core`, or `alloc`.
+
+Please note that there are some limitations to intra-link support.  To create the link we have
+to parse the source code to find out the class of the symbol being referenced (if it is a
+`struct`, `trait`, etc).  That necessarily imposes some restrictions, for instance, we will not
+expand macros so symbols defined in macros will not be linkable.
 
 ## Q/A and troubleshooting
 

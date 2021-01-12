@@ -58,11 +58,28 @@ pub struct Manifest {
 }
 
 impl Manifest {
-  fn new(toml: Value, path: PathBuf) -> Self {
+  fn new<P>(toml: Value, path: P) -> Self
+  where
+    P: AsRef<Path>,
+  {
     Manifest {
       toml,
-      parent_dir: path.parent().unwrap().to_owned(),
+      parent_dir: path.as_ref().parent().unwrap().to_owned(),
     }
+  }
+
+  pub fn load<P>(path: P) -> Result<Self, FindManifestError>
+  where
+    P: AsRef<Path>,
+  {
+    let path = path.as_ref();
+    let mut file =
+      File::open(&path).map_err(|_| FindManifestError::CannotOpenManifest(path.to_owned()))?;
+    let mut file_str = String::new();
+    let _ = file.read_to_string(&mut file_str);
+    let toml = file_str.parse().map_err(FindManifestError::TomlError)?;
+
+    Ok(Manifest::new(toml, path))
   }
 
   /// Get the TOML-formatted manifest by looking up the current directory; if not found, go to the
@@ -79,14 +96,8 @@ impl Manifest {
         _ => false,
       }) {
         let path = file_entry.unwrap().path();
-        let mut file =
-          File::open(&path).map_err(|_| FindManifestError::CannotOpenManifest(path.clone()))?;
-        let mut file_str = String::new();
 
-        let _ = file.read_to_string(&mut file_str);
-        let toml = file_str.parse().map_err(FindManifestError::TomlError)?;
-
-        Ok(Manifest::new(toml, path))
+        Manifest::load(path)
       } else {
         // try to the parent
         if let Some(parent) = dir.parent() {
@@ -298,12 +309,10 @@ fn transform_doc_intralinks(
   doc: &str,
   crate_name: &str,
   entry_point: &Path,
-  emit_warning: impl FnMut(&str),
+  mut emit_warning: impl FnMut(&str),
 ) -> Result<String, TransformError> {
   let symbols: HashSet<FQIdentifier> = intralinks::extract_markdown_intralink_symbols(doc);
-  let modules = intralinks::all_supermodules(symbols.iter());
-  let symbols_type =
-    intralinks::crate_symbols_type(&entry_point, |module| modules.contains(module))?;
+  let symbols_type = intralinks::crate_symbols_type(&entry_point, &symbols, &mut emit_warning)?;
 
   Ok(intralinks::rewrite_markdown_links(
     doc,

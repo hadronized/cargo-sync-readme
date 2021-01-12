@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use syn::export::fmt::Display;
@@ -12,7 +13,7 @@ use syn::Item;
 pub enum IntraLinkError {
   IOError(std::io::Error),
   ParseError(syn::Error),
-  NoModuleFile(String, PathBuf),
+  LoadStdLibError(String),
 }
 
 impl fmt::Display for IntraLinkError {
@@ -20,11 +21,7 @@ impl fmt::Display for IntraLinkError {
     match self {
       IntraLinkError::IOError(err) => write!(f, "IO error: {}", err),
       IntraLinkError::ParseError(err) => write!(f, "Failed to parse rust file: {}", err),
-      IntraLinkError::NoModuleFile(module, dir) => write!(
-        f,
-        "Unable to find module file for module {} in directory {:?}",
-        module, dir
-      ),
+      IntraLinkError::LoadStdLibError(msg) => write!(f, "Failed to load standard library: {}", msg),
     }
   }
 }
@@ -88,6 +85,10 @@ impl FQIdentifier {
       path_shared: Rc::new(Vec::new()),
       path_end: 0,
     }
+  }
+
+  fn root(crate_name: &str) -> FQIdentifier {
+    FQIdentifier::new(FQIdentifierAnchor::Root).join(crate_name)
   }
 
   fn from_string(s: &str) -> Option<FQIdentifier> {
@@ -185,38 +186,73 @@ impl Debug for FQIdentifier {
   }
 }
 
+fn is_cfg_test(attribute: &syn::Attribute) -> bool {
+  let test_attribute: syn::Attribute = syn::parse_quote!(#[cfg(test)]);
+
+  attribute == &test_attribute
+}
+
 fn traverse_module(
   ast: &Vec<Item>,
   dir: &Path,
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<(), IntraLinkError> {
   if !explore_module(&mod_symbol) {
     return Ok(());
   }
 
-  asts.insert(mod_symbol.clone(), ast.clone());
+  // Conditional compilation can create multiple module definitions, e.g.
+  //
+  // ```
+  // #[cfg(foo)]
+  // mod a {}
+  // #[cfg(not(foo))]
+  // mod a {}
+  // ```
+  //
+  // We choose to consider the first one only.
+  match asts.contains_key(&mod_symbol) {
+    true => return Ok(()),
+    false => asts.insert(mod_symbol.clone(), ast.clone()),
+  };
 
   for item in ast.iter() {
     if let Item::Mod(module) = item {
-      let module_symbol: FQIdentifier = mod_symbol.clone().join(&module.ident.to_string());
+      // If a module is gated by `#[cfg(test)]` we skip it.  This happens sometimes in the
+      // standard library, and we want to explore the correct, non-test, module.
+      if module.attrs.iter().any(is_cfg_test) {
+        continue;
+      }
+
+      let child_module_symbol: FQIdentifier = mod_symbol.clone().join(&module.ident.to_string());
 
       match &module.content {
         Some((_, items)) => {
-          traverse_module(&items, dir, module_symbol, asts, explore_module)?;
+          traverse_module(
+            &items,
+            dir,
+            child_module_symbol,
+            asts,
+            explore_module,
+            emit_warning,
+          )?;
         }
-        None if explore_module(&module_symbol) => {
-          let mod_filename = match module_filename(dir, &module.ident) {
-            None => Err(IntraLinkError::NoModuleFile(
-              module.ident.to_string(),
-              dir.to_path_buf(),
-            )),
-            Some(f) => Ok(f),
-          }?;
-
-          traverse_file(mod_filename, module_symbol, asts, explore_module)?;
-        }
+        None if explore_module(&child_module_symbol) => match module_filename(dir, &module.ident) {
+          None => emit_warning(&format!(
+            "Unable to find module file for module {} in directory {:?}",
+            child_module_symbol, dir
+          )),
+          Some(mod_filename) => traverse_file(
+            mod_filename,
+            child_module_symbol,
+            asts,
+            explore_module,
+            emit_warning,
+          )?,
+        },
         None => (),
       }
     }
@@ -230,6 +266,7 @@ fn traverse_file<P: AsRef<Path>>(
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<(), IntraLinkError> {
   let dir: &Path = file.as_ref().parent().expect(&format!(
     "failed to get directory of \"{:?}\"",
@@ -237,7 +274,14 @@ fn traverse_file<P: AsRef<Path>>(
   ));
   let ast: syn::File = file_ast(&file)?;
 
-  traverse_module(&ast.items, dir, mod_symbol, asts, explore_module)
+  traverse_module(
+    &ast.items,
+    dir,
+    mod_symbol,
+    asts,
+    explore_module,
+    emit_warning,
+  )
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -320,15 +364,34 @@ fn symbols_type(asts: &HashMap<FQIdentifier, Vec<Item>>) -> HashMap<FQIdentifier
 
 pub fn crate_symbols_type<P: AsRef<Path>>(
   entry_point: P,
-  explore_module: impl Fn(&FQIdentifier) -> bool,
+  symbols: &HashSet<FQIdentifier>,
+  emit_warning: &mut impl FnMut(&str),
 ) -> Result<HashMap<FQIdentifier, SymbolType>, IntraLinkError> {
+  let modules = all_supermodules(symbols.iter());
   let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+
+  // Only load standard library information if needed.
+  let std_lib_crates = match references_standard_library(&symbols) {
+    true => get_standard_libraries()?,
+    false => Vec::new(),
+  };
+
+  for Crate { name, entrypoint } in std_lib_crates {
+    traverse_file(
+      entrypoint,
+      FQIdentifier::root(&name),
+      &mut asts,
+      &|module| modules.contains(module),
+      emit_warning,
+    )?;
+  }
 
   traverse_file(
     entry_point,
     FQIdentifier::new(FQIdentifierAnchor::Crate),
     &mut asts,
-    &explore_module,
+    &|module| modules.contains(module),
+    emit_warning,
   )?;
 
   Ok(symbols_type(&asts))
@@ -337,9 +400,7 @@ pub fn crate_symbols_type<P: AsRef<Path>>(
 /// Create a set with all supermodules in `symbols`.  For instance, if `symbols` is
 /// `{crate::foo::bar::baz, crate::baz::mumble}` it will return
 /// `{crate, crate::foo, crate::foo::bar, crate::baz}`.
-pub fn all_supermodules<'a>(
-  symbols: impl Iterator<Item = &'a FQIdentifier>,
-) -> HashSet<FQIdentifier> {
+fn all_supermodules<'a>(symbols: impl Iterator<Item = &'a FQIdentifier>) -> HashSet<FQIdentifier> {
   symbols
     .into_iter()
     .flat_map(|s| s.all_ancestors())
@@ -347,35 +408,70 @@ pub fn all_supermodules<'a>(
 }
 
 #[derive(Eq, PartialEq, Debug)]
-enum MarkdownLink<'a> {
-  /// Links like [ref], or [text][ref].
-  Ref {
-    text: Option<&'a str>,
-    reference: &'a str,
-  },
-  /// Links like [text](link).
-  Inline { text: &'a str, link: &'a str },
+struct MarkdownInlineLink {
+  text: String,
+  link: String,
 }
 
-fn split_link_fragment<'a>(link: &'a str) -> (&'a str, &'a str) {
+fn split_link_fragment(link: &str) -> (&str, &str) {
   match link.find('#') {
     None => (link, ""),
     Some(i) => link.split_at(i),
   }
 }
 
-struct MarkdownLinkIterator<'a> {
+fn markdown_inline_link_iterator<'a>(
   source: &'a str,
-  iter: std::iter::Enumerate<std::str::Bytes<'a>>,
-}
+) -> impl Iterator<Item = (Span, MarkdownInlineLink)> + 'a {
+  use pulldown_cmark::*;
 
-impl<'a> MarkdownLinkIterator<'a> {
-  fn new(source: &'a str) -> MarkdownLinkIterator<'a> {
-    MarkdownLinkIterator {
-      source,
-      iter: source.bytes().enumerate(),
+  fn escape_markdown(str: &str, escape_chars: &str) -> String {
+    let mut s = String::new();
+
+    for c in str.chars() {
+      match escape_chars.contains(c) {
+        true => {
+          s.push('\\');
+          s.push(c);
+        }
+        false => s.push(c),
+      }
     }
+
+    s
   }
+
+  let parser = Parser::new_ext(source, Options::all());
+  let mut in_link = false;
+  let mut text = String::new();
+
+  parser
+    .into_offset_iter()
+    .filter_map(move |(event, range)| match event {
+      Event::Start(Tag::Link(LinkType::Inline, ..)) => {
+        in_link = true;
+        None
+      }
+      Event::End(Tag::Link(LinkType::Inline, link, ..)) => {
+        in_link = false;
+
+        let t: String = escape_markdown(&std::mem::take(&mut text), r"\[]");
+        let l: String = escape_markdown(link.as_ref(), r"\()");
+
+        Some((range.into(), MarkdownInlineLink { text: t, link: l }))
+      }
+      Event::Text(s) if in_link => {
+        text.push_str(&s);
+        None
+      }
+      Event::Code(s) if in_link => {
+        text.push('`');
+        text.push_str(&s);
+        text.push('`');
+        None
+      }
+      _ => None,
+    })
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -384,104 +480,23 @@ pub struct Span {
   pub end: usize,
 }
 
-impl<'a> Iterator for MarkdownLinkIterator<'a> {
-  type Item = (Span, MarkdownLink<'a>);
-
-  fn next(&mut self) -> Option<Self::Item> {
-    let mut escape = 0;
-    let mut state = 0;
-    let mut nest_level = 0;
-    let mut start: Option<usize> = None;
-    let mut first_component: Option<&str> = None;
-
-    // This works well with UTF-8 because we just look for symbols that are ASCII, which means
-    // they start with a 0 bit.  In UTF-8 codepoints that start with a 0 bit are ASCII codepoints,
-    // which means that when we match some specific char in the loop below we actually know for
-    // sure we are dealing with the right symbol.
-
-    while let Some((i, c)) = self.iter.next() {
-      match c {
-        _ if escape > 0 => escape -= 1,
-        b'\\' => escape = 1,
-
-        b'[' if state == 0 => {
-          state = 1;
-          start = Some(i);
-        }
-
-        b'[' if state == 1 => nest_level += 1,
-        b']' if state == 1 && nest_level > 0 => nest_level -= 1,
-        b']' if state == 1 => {
-          state = 2;
-          first_component = Some(&self.source[start.unwrap() + 1..i]);
-        }
-
-        b'(' if state == 2 => state = 3,
-        b'[' if state == 2 => state = 4,
-        _ if state == 2 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i,
-          };
-          return Some((
-            span,
-            MarkdownLink::Ref {
-              text: None,
-              reference: first_component.unwrap(),
-            },
-          ));
-        }
-
-        b'(' if state == 3 => nest_level += 1,
-        b')' if state == 3 && nest_level > 0 => nest_level -= 1,
-        b')' if state == 3 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i + 1,
-          };
-          let text = first_component.unwrap();
-          let link = &self.source[start.unwrap() + text.len() + 3..i];
-          return Some((span, MarkdownLink::Inline { text, link }));
-        }
-
-        b'[' if state == 4 => nest_level += 1,
-        b']' if state == 4 && nest_level > 0 => nest_level -= 1,
-        b']' if state == 4 => {
-          let span = Span {
-            start: start.unwrap(),
-            end: i + 1,
-          };
-          let text = first_component.unwrap();
-          let reference = &self.source[start.unwrap() + text.len() + 3..i];
-          return Some((
-            span,
-            MarkdownLink::Ref {
-              text: Some(text),
-              reference,
-            },
-          ));
-        }
-
-        _ => (),
-      }
+impl From<Range<usize>> for Span {
+  fn from(range: Range<usize>) -> Self {
+    Span {
+      start: range.start,
+      end: range.end,
     }
-
-    None
   }
 }
 
 pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
   let mut symbols = HashSet::new();
 
-  for (_, link) in MarkdownLinkIterator::new(doc) {
-    if let MarkdownLink::Inline { link, .. } = link {
-      let (link, _) = split_link_fragment(link);
+  for (_, MarkdownInlineLink { link, .. }) in markdown_inline_link_iterator(doc) {
+    let (link, _) = split_link_fragment(&link);
 
-      if let Some(symbol) = FQIdentifier::from_string(&link) {
-        if let FQIdentifierAnchor::Crate = symbol.anchor {
-          symbols.insert(symbol);
-        }
-      }
+    if let Some(symbol) = FQIdentifier::from_string(&link) {
+      symbols.insert(symbol);
     }
   }
 
@@ -489,7 +504,10 @@ pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
 }
 
 fn documentation_url(symbol: &FQIdentifier, typ: SymbolType, crate_name: &str) -> String {
-  let mut link = format!("https://docs.rs/{}/latest/{}/", crate_name, crate_name);
+  let mut link = match symbol.anchor {
+    FQIdentifierAnchor::Root => format!("https://doc.rust-lang.org/stable/"),
+    FQIdentifierAnchor::Crate => format!("https://docs.rs/{}/latest/{}/", crate_name, crate_name),
+  };
 
   if SymbolType::Crate == typ {
     return link;
@@ -531,46 +549,25 @@ pub fn rewrite_markdown_links(
   let mut new_doc = String::with_capacity(doc.len());
   let mut last_span = Span { start: 0, end: 0 };
 
-  for (span, link) in MarkdownLinkIterator::new(doc) {
+  for (span, link) in markdown_inline_link_iterator(doc) {
     new_doc.push_str(&doc[last_span.end..span.start]);
 
-    match link {
-      MarkdownLink::Ref {
-        text: None,
-        reference,
-      } => new_doc.push_str(&format!("[{}]", reference)),
-      MarkdownLink::Ref {
-        text: Some(t),
-        reference,
-      } => new_doc.push_str(&format!("[{}][{}]", t, reference)),
-      MarkdownLink::Inline { text, link } => {
-        let (link, fragment): (&str, &str) = split_link_fragment(link);
+    let MarkdownInlineLink { text, link } = link;
+    let (link, fragment): (&str, &str) = split_link_fragment(&link);
 
-        match FQIdentifier::from_string(&link) {
-          Some(symbol) if symbols_type.contains_key(&symbol) => {
-            let typ = symbols_type[&symbol];
-            let new_link = documentation_url(&symbol, typ, crate_name);
+    match FQIdentifier::from_string(&link) {
+      Some(symbol) if symbols_type.contains_key(&symbol) => {
+        let typ = symbols_type[&symbol];
+        let new_link = documentation_url(&symbol, typ, crate_name);
 
-            new_doc.push_str(&format!("[{}]({}{})", text, new_link, fragment));
-          }
-          r => {
-            if let Some(symbol) = r {
-              match symbol.anchor {
-                FQIdentifierAnchor::Root => {
-                  emit_warning(&format!(
-                    "Absolute intra-links are not yet supported.  Skipping `{}`.",
-                    symbol
-                  ));
-                }
-                FQIdentifierAnchor::Crate => {
-                  emit_warning(&format!("Could not find `{}` in the code.", symbol));
-                }
-              }
-            }
-
-            new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
-          }
+        new_doc.push_str(&format!("[{}]({}{})", text, new_link, fragment));
+      }
+      r => {
+        if let Some(symbol) = r {
+          emit_warning(&format!("Could not find definition of `{}`.", symbol));
         }
+
+        new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
       }
     }
 
@@ -582,6 +579,83 @@ pub fn rewrite_markdown_links(
   new_doc
 }
 
+fn get_rustc_sysroot_libraries_dir() -> Result<PathBuf, IntraLinkError> {
+  use std::process::*;
+
+  let output = Command::new("rustc")
+    .args(&["--print=sysroot"])
+    .output()
+    .map_err(|e| IntraLinkError::LoadStdLibError(format!("failed to run rustc: {}", e)))?;
+
+  let s = String::from_utf8(output.stdout).expect("unexpected output from rustc");
+  let sysroot = PathBuf::from(s.trim());
+  let src_path = sysroot
+    .join("lib")
+    .join("rustlib")
+    .join("src")
+    .join("rust")
+    .join("library");
+
+  match src_path.is_dir() {
+    false => Err(IntraLinkError::LoadStdLibError(format!(
+      "\"{:?}\" is not a directory",
+      src_path
+    ))),
+    true => Ok(src_path),
+  }
+}
+
+#[derive(Debug)]
+struct Crate {
+  name: String,
+  entrypoint: PathBuf,
+}
+
+fn references_standard_library(symbols: &HashSet<FQIdentifier>) -> bool {
+  // The only way to reference standard libraries that we support is with a intra-link of form `::⋯`.
+  symbols
+    .iter()
+    .any(|symbol| symbol.anchor == FQIdentifierAnchor::Root)
+}
+
+fn get_standard_libraries() -> Result<Vec<Crate>, IntraLinkError> {
+  let libraries_dir = get_rustc_sysroot_libraries_dir()?;
+  let mut std_libs = Vec::with_capacity(32);
+
+  for entry in std::fs::read_dir(&libraries_dir)? {
+    let entry = entry?;
+    let path = entry.path();
+    let cargo_manifest = path.join("Cargo.toml");
+    let lib_entrypoint = path.join("src").join("lib.rs");
+
+    if cargo_manifest.is_file() && lib_entrypoint.is_file() {
+      let crate_name = super::Manifest::load(&cargo_manifest)
+        .map_err(|e| {
+          IntraLinkError::LoadStdLibError(format!(
+            "failed to load manifest in \"{:?}\": {}",
+            cargo_manifest, e
+          ))
+        })?
+        .crate_name()
+        .ok_or_else(|| {
+          IntraLinkError::LoadStdLibError(format!(
+            "cannot get crate name from \"{:?}\"",
+            cargo_manifest
+          ))
+        })?
+        .to_owned();
+      let crate_info = Crate {
+        name: crate_name.to_owned(),
+        entrypoint: lib_entrypoint,
+      };
+
+      std_libs.push(crate_info);
+    }
+  }
+
+  Ok(std_libs)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -590,86 +664,43 @@ mod tests {
   fn test_markdown_link_iterator() {
     let markdown = "A [some text] [another](http://foo.com), [another][one]";
 
-    let mut iter = MarkdownLinkIterator::new(&markdown);
-
+    let mut iter = markdown_inline_link_iterator(&markdown);
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some text"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some text]");
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
     assert_eq!(&markdown[start..end], "[another](http://foo.com)");
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: Some(&"another"),
-        reference: &"one"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another][one]");
 
     assert_eq!(iter.next(), None);
 
     let markdown = "[another](http://foo.com)[another][one]";
-
-    let mut iter = MarkdownLinkIterator::new(&markdown);
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
     assert_eq!(&markdown[start..end], "[another](http://foo.com)");
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: Some(&"another"),
-        reference: &"one"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another][one]");
-
     assert_eq!(iter.next(), None);
 
     let markdown = "A [some [text]], [another [text] (foo)](http://foo.com/foo(bar)), [another [] one][foo[]bar]";
-
-    let mut iter = MarkdownLinkIterator::new(&markdown);
-
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some [text]"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some [text]]");
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Inline {
-        text: &"another [text] (foo)",
-        link: &"http://foo.com/foo(bar)"
+      MarkdownInlineLink {
+        text: r"another \[text\] (foo)".to_owned(),
+        link: r"http://foo.com/foo\(bar\)".to_owned(),
       }
     );
     assert_eq!(
@@ -677,51 +708,45 @@ mod tests {
       "[another [text] (foo)](http://foo.com/foo(bar))"
     );
 
+    assert_eq!(iter.next(), None);
+
+    let markdown = "A [some \\]text], [another](http://foo.\\(com\\)), [another\\]][one\\]]";
+    let mut iter = markdown_inline_link_iterator(&markdown);
+
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: Some(&"another [] one"),
-        reference: &"foo[]bar"
+      MarkdownInlineLink {
+        text: "another".to_owned(),
+        link: r"http://foo.\(com\)".to_owned(),
       }
     );
-    assert_eq!(&markdown[start..end], "[another [] one][foo[]bar]");
+    assert_eq!(&markdown[start..end], r"[another](http://foo.\(com\))");
 
     assert_eq!(iter.next(), None);
 
-    let markdown = "A [some \\]text], [another](http://foo.com\\)), [another\\]][one\\]]";
+    let markdown = "A `this is no link [link](http://foo.com)`";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
-    let mut iter = MarkdownLinkIterator::new(&markdown);
+    assert_eq!(iter.next(), None);
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Ref {
-        text: None,
-        reference: &"some \\]text"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[some \\]text]");
+    let markdown = "A\n```\nthis is no link [link](http://foo.com)\n```";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
-    let (Span { start, end }, link) = iter.next().unwrap();
-    assert_eq!(
-      link,
-      MarkdownLink::Inline {
-        text: &"another",
-        link: &"http://foo.com\\)"
-      }
-    );
-    assert_eq!(&markdown[start..end], "[another](http://foo.com\\))");
+    assert_eq!(iter.next(), None);
+
+    let markdown = "A [link with `code`!](http://foo.com)!";
+    let mut iter = markdown_inline_link_iterator(&markdown);
 
     let (Span { start, end }, link) = iter.next().unwrap();
     assert_eq!(
       link,
-      MarkdownLink::Ref {
-        text: Some(&"another\\]"),
-        reference: &"one\\]"
+      MarkdownInlineLink {
+        text: "link with `code`!".to_owned(),
+        link: "http://foo.com".to_owned(),
       }
     );
-    assert_eq!(&markdown[start..end], "[another\\]][one\\]]");
+    assert_eq!(&markdown[start..end], "[link with `code`!](http://foo.com)");
 
     assert_eq!(iter.next(), None);
   }
@@ -772,6 +797,7 @@ mod tests {
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|m| *m != module_skip,
+      &mut |_| (),
     )
     .ok()
     .unwrap();
@@ -815,6 +841,122 @@ mod tests {
   }
 
   #[test]
+  fn test_symbols_type_with_mod_under_cfg_test() {
+    let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+
+    let source = "
+        #[cfg(not(test))]
+        mod a {
+          struct MyStruct {}
+        }
+
+        #[cfg(test)]
+        mod a {
+          struct MyStructTest {}
+        }
+
+        #[cfg(test)]
+        mod b {
+          struct MyStructTest {}
+        }
+
+        #[cfg(not(test))]
+        mod b {
+          struct MyStruct {}
+        }
+        ";
+
+    traverse_module(
+      &syn::parse_file(&source).unwrap().items,
+      &PathBuf::new(),
+      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      &mut asts,
+      &|_| true,
+      &mut |_| (),
+    )
+    .ok()
+    .unwrap();
+
+    let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
+    let expected: HashMap<FQIdentifier, SymbolType> = [
+      (
+        FQIdentifier::from_string("crate").unwrap(),
+        SymbolType::Crate,
+      ),
+      (
+        FQIdentifier::from_string("crate::a").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+      (
+        FQIdentifier::from_string("crate::b").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::b::MyStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    assert_eq!(symbols_type, expected)
+  }
+
+  #[test]
+  fn test_symbols_type_multiple_module_first_wins() {
+    let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
+
+    let source = "
+        #[cfg(not(foo))]
+        mod a {
+          struct MyStruct {}
+        }
+
+        #[cfg(foo)]
+        mod a {
+          struct Skip {}
+        }
+        ";
+
+    traverse_module(
+      &syn::parse_file(&source).unwrap().items,
+      &PathBuf::new(),
+      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      &mut asts,
+      &|_| true,
+      &mut |_| (),
+    )
+    .ok()
+    .unwrap();
+
+    let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
+    let expected: HashMap<FQIdentifier, SymbolType> = [
+      (
+        FQIdentifier::from_string("crate").unwrap(),
+        SymbolType::Crate,
+      ),
+      (
+        FQIdentifier::from_string("crate::a").unwrap(),
+        SymbolType::Mod,
+      ),
+      (
+        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
+        SymbolType::Struct,
+      ),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    assert_eq!(symbols_type, expected)
+  }
+
+  #[test]
   fn test_traverse_module_expore_lazily() {
     let symbols: HashSet<FQIdentifier> = [FQIdentifier::from_string("crate::module").unwrap()]
       .iter()
@@ -836,6 +978,7 @@ mod tests {
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|module| modules.contains(module),
+      &mut |_| (),
     )
     .ok()
     .unwrap();
@@ -884,13 +1027,14 @@ mod tests {
   #[test]
   fn test_extract_markdown_intralink_symbols() {
     let doc = "
-        # Foobini
+# Foobini
 
-        This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        Go ahead and check all the [structs in foo](crate::foo#structs)
-        ";
+Go ahead and check all the [structs in foo](crate::foo#structs).
+Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
+";
 
     let symbols = extract_markdown_intralink_symbols(doc);
 
@@ -898,6 +1042,8 @@ mod tests {
       FQIdentifier::from_string("crate").unwrap(),
       FQIdentifier::from_string("crate::amodule").unwrap(),
       FQIdentifier::from_string("crate::foo").unwrap(),
+      FQIdentifier::from_string("::std::sync::Arc").unwrap(),
+      FQIdentifier::from_string("::alloc::sync::Arc").unwrap(),
     ]
     .iter()
     .cloned()
@@ -908,17 +1054,18 @@ mod tests {
 
   #[test]
   fn test_rewrite_markdown_links() {
-    let doc = "
-        # Foobini
+    let doc = r"
+# Foobini
 
-        This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        This link is [broken](crate::broken) and this is [not supported](::foo::bar).
+This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this
+should [wor\\k \[fi\]le](f\\i\(n\)e).
 
-        Go ahead and check all the [structs in foo](crate::foo#structs) specifically
-        [this one](crate::foo::BestStruct)
-        ";
+Go ahead and check all the [structs in foo](crate::foo#structs) specifically
+[this one](crate::foo::BestStruct)
+";
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = [
       (
@@ -943,17 +1090,18 @@ mod tests {
     .collect();
 
     let new_readme = rewrite_markdown_links(&doc, &symbols_type, "foobini", |_| ());
-    let expected = "
-        # Foobini
+    let expected = r"
+# Foobini
 
-        This [this crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
-        other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
+This [this crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
+other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
-        This link is [broken](crate::broken) and this is [not supported](::foo::bar).
+This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this
+should [wor\\k \[fi\]le](f\\i\(n\)e).
 
-        Go ahead and check all the [structs in foo](https://docs.rs/foobini/latest/foobini/foo/#structs) specifically
-        [this one](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
-        ";
+Go ahead and check all the [structs in foo](https://docs.rs/foobini/latest/foobini/foo/#structs) specifically
+[this one](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
+";
 
     assert_eq!(new_readme, expected);
   }

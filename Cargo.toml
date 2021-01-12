@@ -25,5 +25,5 @@ required-features = ["cli"]
 regex = "1.4"
 structopt = { version = "0.3", optional = true }
 toml = "0.5"
-syn = "1"
-itertools = "0.10.0"
+syn = { version = "1", features= ["extra-traits"]}
+pulldown-cmark = "0.8"
