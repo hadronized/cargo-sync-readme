@@ -1,4 +1,22 @@
-# 1.0.0
+# 1.1
+
+> Tue Jan 12, 2021
+
+## Minor changes
+
+- Add support for intralinks in the generated documentation in the README. This allows to point correctly to the right 
+  crates.io link while visiting the README of the project you used `cargo sync-readme` on.
+
+## Patch changes
+
+- Fix a bug where hidden code was not removed when the commented line was empty.
+- Bump `regex` to `1.4.3`.
+- Bump `struct-opt` to `0.3.21`.
+- Bump `toml` to `0.5.8`.
+- Bump `syn` to `1.0.56`.
+- Bump `itertools` to `0.10`.
+
+# 1.0
 
 > Sun Apr 26th 2020
 
