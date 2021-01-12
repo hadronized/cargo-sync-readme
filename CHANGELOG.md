@@ -5,7 +5,7 @@
 ## Minor changes
 
 - Add support for intralinks in the generated documentation in the README. This allows to point correctly to the right 
-  crates.io link while visiting the README of the project you used `cargo sync-readme` on.
+  docs.rs link while visiting the README of the project you used `cargo sync-readme` on.
 
 ## Patch changes
 
