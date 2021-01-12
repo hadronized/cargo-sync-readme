@@ -205,8 +205,6 @@ where
 }
 
 fn transform_inner_doc(doc: &str, show_hidden_doc: bool, crlf: bool) -> String {
-  let mut codeblock_st = CodeBlockState::None;
-
   let lines: Vec<String> = doc
     .lines()
     .skip_while(|l| !l.trim_start().starts_with("//!"))
@@ -228,6 +226,7 @@ fn transform_inner_doc(doc: &str, show_hidden_doc: bool, crlf: bool) -> String {
     .min()
     .unwrap_or(0);
 
+  let mut codeblock_st = CodeBlockState::None;
   let sanitized_annotated_lines: Vec<String> = lines
     .into_iter()
     .map(|line| {
