@@ -17,7 +17,6 @@ const MARKER_END: &str = "<!-- cargo-sync-readme end -->";
 const MARKER_RE: &str = "^<!-- cargo-sync-readme -->\r?$";
 const MARKER_START_RE: &str = "^<!-- cargo-sync-readme start -->\r?$";
 const MARKER_END_RE: &str = "^<!-- cargo-sync-readme end -->\r?$";
-const RUST_LANG_ANNOTATION: &str = "rust";
 
 pub mod intralinks;
 
@@ -410,6 +409,11 @@ fn reformat_with_markers(first_part: &str, doc: &str, second_part: &str, crlf: b
   }
 }
 
+/// Annotate code blocks for lines.
+///
+/// This function is expected to be called while iterating sequentially on lines, as it mutates its argument to
+/// accumulate the code block state. If it encounters a code block annotation, it will automatically accumulate the
+/// state and transform the lines to reflect the annotations.
 fn annotate_code_blocks(st: &mut CodeBlockState, line: String, crlf: bool) -> String {
   match st {
     CodeBlockState::None => {
@@ -417,12 +421,22 @@ fn annotate_code_blocks(st: &mut CodeBlockState, line: String, crlf: bool) -> St
         *st = CodeBlockState::InWithTildes;
       } else if line.starts_with("```") {
         *st = CodeBlockState::InWithBackticks;
+      } else {
+        // not a code block annotation; skip
+        return line;
       }
 
-      if crlf && line.ends_with("```\r\n") {
-        line.replace("\r\n", &format!("{}\r\n", RUST_LANG_ANNOTATION))
-      } else if !crlf && line.ends_with("```\n") {
-        line.replace("\n", &format!("{}\n", RUST_LANG_ANNOTATION))
+      // language used in the code block; e.g. ```<lang>
+      // some “languages” are not really languages but doctest annotations, such as should_panic; in this case, we
+      // remap them to “rust”
+      if crlf && line.ends_with("\r\n") {
+        let lang = remap_code_block_lang(&line[3..line.len() - 2]);
+        format!("{}{}\r\n", &line[..3], lang)
+      // line.replace("\r\n", &format!("{}\r\n", lang))
+      } else if !crlf && line.ends_with("\n") {
+        let lang = remap_code_block_lang(&line[3..line.len() - 1]);
+        format!("{}{}\n", &line[..3], lang)
+      // line.replace("\n", &format!("{}\n", lang))
       } else {
         line
       }
@@ -443,6 +457,21 @@ fn annotate_code_blocks(st: &mut CodeBlockState, line: String, crlf: bool) -> St
 
       line
     }
+  }
+}
+
+/// Map a code block language to its target code block language.
+///
+/// Most of the time, this function will be the identity function, but some language are doctest attributes that need
+/// to be remapped to the correct language (most of the time, it will be rust).
+fn remap_code_block_lang(lang: &str) -> &str {
+  match lang {
+    // no lang is Rust by default; the rest are doctest attributes
+    "" | "ignore" | "should_panic" | "no_run" | "compile_fail" | "edition2015" | "edition2018" => {
+      "rust"
+    }
+
+    _ => lang,
   }
 }
 
