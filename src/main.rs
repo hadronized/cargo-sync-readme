@@ -95,14 +95,12 @@
 //! Not yet! If you have ideas how the tool should behave with them, please contribute with an issue or
 //! a PR!
 
-use std::env::current_dir;
-use std::fs::File;
-use std::io::Write;
-use std::process;
+use std::{env::current_dir, fmt, fs::File, io::Write, process};
 use structopt::StructOpt;
 
 use cargo_sync_readme::{
-  extract_inner_doc, read_readme, transform_readme, Manifest, PreferDocFrom,
+  extract_inner_doc, read_readme, transform_readme, FindManifestError, Manifest, PreferDocFrom,
+  TransformError, WithWarnings,
 };
 
 #[derive(Debug, StructOpt)]
@@ -145,72 +143,115 @@ files.
 If you’re in the special situation where your crate defines both a binary and a library, you should
 consider using the -f option to hint sync-readme which file it should read the documentation from.";
 
+#[derive(Debug)]
+enum RuntimeError {
+  FindManifestError(FindManifestError),
+  CannotFindEntryPoint,
+  HardError(String),
+  HadWarnings,
+  TransformError(TransformError),
+  NotSynchronized,
+}
+
+impl fmt::Display for RuntimeError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      RuntimeError::FindManifestError(ref e) => write!(f, "{}", e),
+      RuntimeError::CannotFindEntryPoint => write!(f, "{}", CANNOT_FIND_ENTRY_POINT_ERR_STR),
+      RuntimeError::HardError(ref e) => write!(f, "{}", e),
+      RuntimeError::HadWarnings => f.write_str("there were warnings"),
+      RuntimeError::TransformError(ref e) => write!(f, "{}", e),
+      RuntimeError::NotSynchronized => f.write_str("the README is not synchronized!"),
+    }
+  }
+}
+
+impl From<FindManifestError> for RuntimeError {
+  fn from(err: FindManifestError) -> Self {
+    Self::FindManifestError(err)
+  }
+}
+
+impl From<TransformError> for RuntimeError {
+  fn from(err: TransformError) -> Self {
+    Self::TransformError(err)
+  }
+}
+
+impl RuntimeError {
+  fn hard_error(e: impl Into<String>) -> Self {
+    RuntimeError::HardError(e.into())
+  }
+}
+
 fn main() {
-  let CliOpt::SyncReadme {
-    show_hidden_doc,
-    prefer_doc_from,
-    crlf,
-    check,
-  } = CliOpt::from_args();
+  let cli_opt = CliOpt::from_args();
 
   if let Ok(pwd) = current_dir() {
-    match Manifest::find_manifest(pwd) {
-      Ok(ref manifest) => {
-        let crate_name = match manifest.crate_name() {
-          None => {
-            eprintln!("Failed to get the name of the crate");
-            process::exit(1);
-          }
-          Some(name) => name,
-        };
-        let entry_point = manifest.entry_point(prefer_doc_from);
-
-        if let Some(entry_point) = entry_point {
-          let doc = extract_inner_doc(&entry_point, show_hidden_doc, crlf);
-          let readme_path = manifest.readme();
-          let mut had_warnings = false;
-          let emit_warning = |msg: &str| {
-            eprintln!("warning: {}", msg);
-            had_warnings = true;
-          };
-          let transformation = read_readme(&readme_path).and_then(|readme| {
-            transform_readme(&readme, doc, crate_name, entry_point, crlf, emit_warning)
-              .map(|new| (readme, new))
-          });
-
-          match transformation {
-            Ok((ref old_readme, ref new_readme)) if check => {
-              if old_readme != new_readme {
-                eprintln!("README is not synchronized!");
-                process::exit(1);
-              }
-            }
-
-            Ok((_, ref new_readme)) => {
-              let mut file = File::create(readme_path).unwrap();
-              let _ = file.write_all(new_readme.as_bytes());
-
-              if had_warnings {
-                // Use code 2 for warnings.
-                process::exit(2);
-              }
-            }
-
-            Err(e) => eprintln!("{}", e),
-          }
-        } else {
-          eprintln!("{}", CANNOT_FIND_ENTRY_POINT_ERR_STR);
-          process::exit(1);
-        }
-      }
-
-      Err(e) => {
-        eprintln!("{}", e);
-        process::exit(1);
-      }
+    let run = Manifest::find_manifest(pwd)
+      .map_err(RuntimeError::from)
+      .and_then(|manifest| run_with_manifest(manifest, cli_opt));
+    if let Err(e) = run {
+      eprintln!("{}", e);
+      process::exit(1);
     }
   } else {
     eprintln!("It seems like you’re running this command from nowhere good…");
     process::exit(1);
+  }
+}
+
+fn run_with_manifest(manifest: Manifest, cli_opt: CliOpt) -> Result<(), RuntimeError> {
+  let CliOpt::SyncReadme {
+    prefer_doc_from,
+    show_hidden_doc,
+    crlf,
+    check,
+    ..
+  } = cli_opt;
+
+  let crate_name = manifest
+    .crate_name()
+    .ok_or_else(|| RuntimeError::hard_error("Failed to get the name of the crate"))?;
+  let entry_point = manifest.entry_point(prefer_doc_from);
+
+  if let Some(entry_point) = entry_point {
+    let doc = extract_inner_doc(&entry_point, show_hidden_doc, crlf)?;
+    let readme_path = manifest.readme();
+    let (old_readme, new_readme_with_warnings) = read_readme(&readme_path).and_then(|readme| {
+      transform_readme(&readme, doc, crate_name, entry_point, crlf)
+        .map(|new_readme_with_warnings| (readme, new_readme_with_warnings))
+    })?;
+    let WithWarnings {
+      value: new_readme,
+      warnings,
+    } = new_readme_with_warnings;
+
+    for w in &warnings {
+      eprintln!("{}", w);
+    }
+
+    if check {
+      report_synchronized(&old_readme, &new_readme)
+    } else {
+      let mut file = File::create(readme_path).unwrap();
+      let _ = file.write_all(new_readme.as_bytes());
+
+      if warnings.is_empty() {
+        Ok(())
+      } else {
+        Err(RuntimeError::HadWarnings)
+      }
+    }
+  } else {
+    Err(RuntimeError::CannotFindEntryPoint)
+  }
+}
+
+fn report_synchronized(old: &str, new: &str) -> Result<(), RuntimeError> {
+  if old != new {
+    Err(RuntimeError::NotSynchronized)
+  } else {
+    Ok(())
   }
 }

@@ -9,6 +9,8 @@ use std::rc::Rc;
 use syn::Ident;
 use syn::Item;
 
+use crate::WithWarnings;
+
 #[derive(Debug)]
 pub enum IntraLinkError {
   IOError(std::io::Error),
@@ -192,7 +194,7 @@ fn traverse_module(
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
-  emit_warning: &mut impl FnMut(&str),
+  warnings: &mut Vec<String>,
 ) -> Result<(), IntraLinkError> {
   if !explore_module(&mod_symbol) {
     return Ok(());
@@ -231,11 +233,11 @@ fn traverse_module(
             child_module_symbol,
             asts,
             explore_module,
-            emit_warning,
+            warnings,
           )?;
         }
         None if explore_module(&child_module_symbol) => match module_filename(dir, &module.ident) {
-          None => emit_warning(&format!(
+          None => warnings.push(format!(
             "Unable to find module file for module {} in directory {:?}",
             child_module_symbol, dir
           )),
@@ -244,7 +246,7 @@ fn traverse_module(
             child_module_symbol,
             asts,
             explore_module,
-            emit_warning,
+            warnings,
           )?,
         },
         None => (),
@@ -260,7 +262,7 @@ fn traverse_file<P: AsRef<Path>>(
   mod_symbol: FQIdentifier,
   asts: &mut HashMap<FQIdentifier, Vec<Item>>,
   explore_module: &impl Fn(&FQIdentifier) -> bool,
-  emit_warning: &mut impl FnMut(&str),
+  warnings: &mut Vec<String>,
 ) -> Result<(), IntraLinkError> {
   let dir: &Path = file.as_ref().parent().expect(&format!(
     "failed to get directory of \"{:?}\"",
@@ -268,14 +270,7 @@ fn traverse_file<P: AsRef<Path>>(
   ));
   let ast: syn::File = file_ast(&file)?;
 
-  traverse_module(
-    &ast.items,
-    dir,
-    mod_symbol,
-    asts,
-    explore_module,
-    emit_warning,
-  )
+  traverse_module(&ast.items, dir, mod_symbol, asts, explore_module, warnings)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -359,7 +354,7 @@ fn symbols_type(asts: &HashMap<FQIdentifier, Vec<Item>>) -> HashMap<FQIdentifier
 pub fn crate_symbols_type<P: AsRef<Path>>(
   entry_point: P,
   symbols: &HashSet<FQIdentifier>,
-  emit_warning: &mut impl FnMut(&str),
+  warnings: &mut Vec<String>,
 ) -> Result<HashMap<FQIdentifier, SymbolType>, IntraLinkError> {
   let modules = all_supermodules(symbols.iter());
   let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
@@ -376,7 +371,7 @@ pub fn crate_symbols_type<P: AsRef<Path>>(
       FQIdentifier::root(&name),
       &mut asts,
       &|module| modules.contains(module),
-      emit_warning,
+      warnings,
     )?;
   }
 
@@ -385,7 +380,7 @@ pub fn crate_symbols_type<P: AsRef<Path>>(
     FQIdentifier::new(FQIdentifierAnchor::Crate),
     &mut asts,
     &|module| modules.contains(module),
-    emit_warning,
+    warnings,
   )?;
 
   Ok(symbols_type(&asts))
@@ -538,8 +533,8 @@ pub fn rewrite_markdown_links(
   doc: &str,
   symbols_type: &HashMap<FQIdentifier, SymbolType>,
   crate_name: &str,
-  mut emit_warning: impl FnMut(&str),
-) -> String {
+  mut warnings: Vec<String>,
+) -> WithWarnings<String> {
   let mut new_doc = String::with_capacity(doc.len());
   let mut last_span = Span { start: 0, end: 0 };
 
@@ -556,9 +551,10 @@ pub fn rewrite_markdown_links(
 
         new_doc.push_str(&format!("[{}]({}{})", text, new_link, fragment));
       }
+
       r => {
         if let Some(symbol) = r {
-          emit_warning(&format!("Could not find definition of `{}`.", symbol));
+          warnings.push(format!("Could not find definition of `{}`.", symbol));
         }
 
         new_doc.push_str(&format!("[{}]({}{})", text, link, fragment));
@@ -570,7 +566,7 @@ pub fn rewrite_markdown_links(
 
   new_doc.push_str(&doc[last_span.end..]);
 
-  new_doc
+  WithWarnings::new(new_doc, warnings)
 }
 
 fn get_rustc_sysroot_libraries_dir() -> Result<PathBuf, IntraLinkError> {
@@ -785,13 +781,14 @@ mod tests {
         }
         ";
 
+    let mut warnings = Vec::new();
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|m| *m != module_skip,
-      &mut |_| (),
+      &mut warnings,
     )
     .ok()
     .unwrap();
@@ -860,13 +857,14 @@ mod tests {
         }
         ";
 
+    let mut warnings = Vec::new();
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|_| true,
-      &mut |_| (),
+      &mut warnings,
     )
     .ok()
     .unwrap();
@@ -917,13 +915,14 @@ mod tests {
         }
         ";
 
+    let mut warnings = Vec::new();
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|_| true,
-      &mut |_| (),
+      &mut warnings,
     )
     .ok()
     .unwrap();
@@ -966,13 +965,14 @@ mod tests {
         }
         ";
 
+    let mut warnings = Vec::new();
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
       FQIdentifier::new(FQIdentifierAnchor::Crate),
       &mut asts,
       &|module| modules.contains(module),
-      &mut |_| (),
+      &mut warnings,
     )
     .ok()
     .unwrap();
@@ -1083,7 +1083,9 @@ Go ahead and check all the [structs in foo](crate::foo#structs) specifically
     .cloned()
     .collect();
 
-    let new_readme = rewrite_markdown_links(&doc, &symbols_type, "foobini", |_| ());
+    let WithWarnings {
+      value: new_readme, ..
+    } = rewrite_markdown_links(&doc, &symbols_type, "foobini", Vec::new());
     let expected = r"
 # Foobini
 
