@@ -5,7 +5,8 @@
 ## Minor changes
 
 - Add support for intralinks in the generated documentation in the README. This allows to point correctly to the right 
-  docs.rs link while visiting the README of the project you used `cargo sync-readme` on.
+  docs.rs link while visiting the README of the project you used `cargo sync-readme` on. Links to the standard library
+  are also supported.
 
 ## Patch changes
 
