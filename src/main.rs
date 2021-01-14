@@ -55,11 +55,16 @@
 //!
 //! ## Intra-link support
 //!
+//! > This feature is new and lacks testing.
+//!
 //! This tool rewrites intra-links so they point at the corresponding place in
 //! [docs.rs](https://docs.rs). The intra-links must be of the form `[⋯](crate::⋯)`.
 //!
+//! The regular shortcut notation (using `[foo]: crate::foo` at the end of your Markdown document
+//! and using `[foo]` everywhere else) is not currently supported.
+//!
 //! Links to the standard library are also supported, and they must be of the form
-//! `[⋯](<crate>::⋯)`, where `<crate>` is a crate that is part of the standard library, such as
+//! `[⋯](::<crate>::⋯)`, where `<crate>` is a crate that is part of the standard library, such as
 //! `std`, `core`, or `alloc`.
 //!
 //! Please note that there are some limitations to intra-link support. To create the links we have
