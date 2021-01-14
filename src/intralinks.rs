@@ -432,31 +432,28 @@ fn markdown_inline_link_iterator<'a>(
 
   let parser = Parser::new_ext(source, Options::all());
   let mut in_link = false;
-  let mut text = String::new();
+  let mut start_text = 0;
+  let mut end_text = 0;
 
   parser
     .into_offset_iter()
     .filter_map(move |(event, range)| match event {
       Event::Start(Tag::Link(LinkType::Inline, ..)) => {
         in_link = true;
+        start_text = range.start + 1;
+        end_text = range.end;
         None
       }
       Event::End(Tag::Link(LinkType::Inline, link, ..)) => {
         in_link = false;
 
-        let t: String = escape_markdown(&std::mem::take(&mut text), r"\[]");
+        let t: String = source[start_text..end_text].to_owned();
         let l: String = escape_markdown(link.as_ref(), r"\()");
 
         Some((range.into(), MarkdownInlineLink { text: t, link: l }))
       }
-      Event::Text(s) if in_link => {
-        text.push_str(&s);
-        None
-      }
-      Event::Code(s) if in_link => {
-        text.push('`');
-        text.push_str(&s);
-        text.push('`');
+      _ if in_link => {
+        end_text = range.end;
         None
       }
       _ => None,
@@ -689,7 +686,7 @@ mod tests {
     assert_eq!(
       link,
       MarkdownInlineLink {
-        text: r"another \[text\] (foo)".to_owned(),
+        text: r"another [text] (foo)".to_owned(),
         link: r"http://foo.com/foo\(bar\)".to_owned(),
       }
     );
@@ -1059,6 +1056,8 @@ should [wor\\k \[fi\]le](f\\i\(n\)e).
 
 Go ahead and check all the [structs in foo](crate::foo#structs) specifically
 [this one](crate::foo::BestStruct)
+
+[![BestStruct doc](https://example.com/image.png)](crate::foo::BestStruct)
 ";
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = [
@@ -1097,6 +1096,8 @@ should [wor\\k \[fi\]le](f\\i\(n\)e).
 
 Go ahead and check all the [structs in foo](https://docs.rs/foobini/latest/foobini/foo/#structs) specifically
 [this one](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
+
+[![BestStruct doc](https://example.com/image.png)](https://docs.rs/foobini/latest/foobini/foo/struct.BestStruct.html)
 ";
 
     assert_eq!(new_readme, expected);

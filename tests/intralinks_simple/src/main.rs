@@ -5,6 +5,8 @@
 //!
 //! Go ahead and check all the [structs in foo](crate::foo#structs) specifically
 //! [this one](crate::foo::BestStruct)
+//!
+//! [![BestStruct doc](https://example.com/image.png)](crate::foo::BestStruct)
 
 mod amodule {}
 

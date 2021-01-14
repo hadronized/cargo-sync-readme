@@ -10,4 +10,6 @@ This link is [broken](crate::broken), but this should [wor\\k \[ju\]st](f\\i\(n\
 Go ahead and check all the [structs in foo](https://docs.rs/integration_test/latest/integration_test/foo/#structs) specifically
 [this one](https://docs.rs/integration_test/latest/integration_test/foo/struct.BestStruct.html)
 
+[![BestStruct doc](https://example.com/image.png)](https://docs.rs/integration_test/latest/integration_test/foo/struct.BestStruct.html)
+
 <!-- cargo-sync-readme end -->
