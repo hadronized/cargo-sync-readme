@@ -414,22 +414,6 @@ fn markdown_inline_link_iterator<'a>(
 ) -> impl Iterator<Item = (Span, MarkdownInlineLink)> + 'a {
   use pulldown_cmark::*;
 
-  fn escape_markdown(str: &str, escape_chars: &str) -> String {
-    let mut s = String::new();
-
-    for c in str.chars() {
-      match escape_chars.contains(c) {
-        true => {
-          s.push('\\');
-          s.push(c);
-        }
-        false => s.push(c),
-      }
-    }
-
-    s
-  }
-
   let parser = Parser::new_ext(source, Options::all());
   let mut in_link = false;
   let mut start_text = 0;
@@ -444,19 +428,20 @@ fn markdown_inline_link_iterator<'a>(
         end_text = range.end;
         None
       }
-      Event::End(Tag::Link(LinkType::Inline, link, ..)) => {
+      Event::End(Tag::Link(LinkType::Inline, ..)) => {
         in_link = false;
 
-        let t: String = source[start_text..end_text].to_owned();
-        let l: String = escape_markdown(link.as_ref(), r"\()");
+        let text = source[start_text..end_text].to_owned();
+        let link = source[(end_text + 2)..(range.end - 1)].to_owned();
 
-        Some((range.into(), MarkdownInlineLink { text: t, link: l }))
+        Some((range.into(), MarkdownInlineLink { text, link }))
       }
-      _ if in_link => {
-        end_text = range.end;
+      _ => {
+        if in_link {
+          end_text = range.end;
+        }
         None
       }
-      _ => None,
     })
 }
 
@@ -686,8 +671,8 @@ mod tests {
     assert_eq!(
       link,
       MarkdownInlineLink {
-        text: r"another [text] (foo)".to_owned(),
-        link: r"http://foo.com/foo\(bar\)".to_owned(),
+        text: "another [text] (foo)".to_owned(),
+        link: "http://foo.com/foo(bar)".to_owned(),
       }
     );
     assert_eq!(
