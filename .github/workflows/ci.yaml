@@ -14,6 +14,9 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          # We need to install the source of the standard library for the integration tests to check that links
+          # to the standard library are correctly generated.
+          components: rust-src
 
       - uses: actions/checkout@v2
 
@@ -42,3 +45,9 @@ jobs:
 
       - name: rustfmt
         run: cargo fmt -- --check
+
+      - name: rustfmt integration tests
+        run: |
+          for test_dir_cargo_toml in $(find tests -name 'Cargo.toml'); do
+            cargo fmt --manifest-path="$test_dir_cargo_toml" -- --check
+          done

@@ -588,7 +588,7 @@ fn get_rustc_sysroot_libraries_dir() -> Result<PathBuf, IntraLinkError> {
 
   match src_path.is_dir() {
     false => Err(IntraLinkError::LoadStdLibError(format!(
-      "\"{:?}\" is not a directory",
+      "Cannot find rust standard library in \"{:?}\"",
       src_path
     ))),
     true => Ok(src_path),
@@ -1023,7 +1023,7 @@ mod tests {
     let doc = "
 # Foobini
 
-This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+This [beautiful crate](crate) is cool because it contains [modules](crate::amodule) and some
 other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
 Go ahead and check all the [structs in foo](crate::foo#structs).
@@ -1051,7 +1051,7 @@ Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
     let doc = r"
 # Foobini
 
-This [this crate](crate) is cool because it contains [modules](crate::amodule) and some
+This [beautiful crate](crate) is cool because it contains [modules](crate::amodule) and some
 other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
 This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this
@@ -1089,7 +1089,7 @@ Go ahead and check all the [structs in foo](crate::foo#structs) specifically
     let expected = r"
 # Foobini
 
-This [this crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
+This [beautiful crate](https://docs.rs/foobini/latest/foobini/) is cool because it contains [modules](https://docs.rs/foobini/latest/foobini/amodule/) and some
 other [stuff](https://en.wikipedia.org/wiki/Stuff) as well.
 
 This link is [broken](crate::broken) and this is [not supported](::foo::bar), but this

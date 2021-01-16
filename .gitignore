@@ -1,2 +1,5 @@
 /target
 **/*.rs.bk
+/tests/*/Cargo.lock
+/tests/*/target
+/tests/*/README.md
