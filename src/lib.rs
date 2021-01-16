@@ -358,7 +358,7 @@ fn transform_doc_intralinks(
 ) -> Result<WithWarnings<String>, TransformError> {
   let symbols: HashSet<FQIdentifier> = intralinks::extract_markdown_intralink_symbols(doc);
   let mut warnings = Vec::new();
-  let symbols_type = intralinks::crate_symbols_type(&entry_point, &symbols, &mut warnings)?;
+  let symbols_type = intralinks::load_symbols_type(&entry_point, &symbols, &mut warnings)?;
 
   Ok(intralinks::rewrite_markdown_links(
     doc,
