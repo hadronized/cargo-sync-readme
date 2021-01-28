@@ -146,7 +146,9 @@ impl FQIdentifier {
   }
 
   fn join(mut self, s: &str) -> FQIdentifier {
-    Rc::make_mut(&mut self.path_shared).push(s.to_string());
+    let path = Rc::make_mut(&mut self.path_shared);
+    path.truncate(self.path_end);
+    path.push(s.to_string());
     self.path_end += 1;
     self
   }
@@ -696,6 +698,23 @@ mod tests {
     assert_eq!(identifier("::std::baz").parent(), Some(identifier("::std")));
     assert_eq!(identifier("crate").parent(), None);
     assert_eq!(identifier("::std").parent(), None);
+  }
+
+  #[test]
+  fn test_identifier_join() {
+    assert_eq!(
+      identifier("crate::foo").join("bar"),
+      identifier("crate::foo::bar"),
+    );
+    assert_eq!(
+      identifier("::std::foo").join("bar"),
+      identifier("::std::foo::bar"),
+    );
+
+    assert_eq!(
+      identifier("::std::foo::bar").parent().unwrap().join("baz"),
+      identifier("::std::foo::baz"),
+    );
   }
 
   #[test]
