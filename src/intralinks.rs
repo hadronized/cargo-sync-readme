@@ -97,9 +97,7 @@ impl FQIdentifier {
     let anchor;
     let rest;
 
-    if s == "::" {
-      return Some(FQIdentifier::new(FQIdentifierAnchor::Root));
-    } else if s.starts_with("::") {
+    if s.starts_with("::") {
       anchor = FQIdentifierAnchor::Root;
       rest = &s[2..];
     } else if s == "crate" {
