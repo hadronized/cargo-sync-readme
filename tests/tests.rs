@@ -96,3 +96,8 @@ fn integration_test_intralinks_ambiguous_module() {
 fn integration_test_intralinks_stdlib_links() {
   run_test("intralinks_stdlib_links");
 }
+
+#[test]
+fn integration_test_intralinks_crate_name_hyphen() {
+  run_test("intralinks_crate_name_hyphen");
+}

@@ -493,9 +493,10 @@ pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
 }
 
 fn documentation_url(symbol: &FQIdentifier, typ: SymbolType, crate_name: &str) -> String {
+  let package_name = crate_name.replace("-", "_");
   let mut link = match symbol.anchor {
     FQIdentifierAnchor::Root => format!("https://doc.rust-lang.org/stable/"),
-    FQIdentifierAnchor::Crate => format!("https://docs.rs/{}/latest/{}/", crate_name, crate_name),
+    FQIdentifierAnchor::Crate => format!("https://docs.rs/{}/latest/{}/", crate_name, package_name),
   };
 
   if SymbolType::Crate == typ {
@@ -1016,6 +1017,16 @@ mod tests {
       "foobini",
     );
     assert_eq!(link, "https://docs.rs/foobini/latest/foobini/amodule/");
+
+    let link = documentation_url(
+      &FQIdentifier::from_string("crate::amodule").unwrap(),
+      SymbolType::Mod,
+      "foo-bar-mumble",
+    );
+    assert_eq!(
+      link,
+      "https://docs.rs/foo-bar-mumble/latest/foo_bar_mumble/amodule/"
+    );
   }
 
   #[test]
