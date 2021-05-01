@@ -22,7 +22,7 @@ required-features = ["cli"]
 
 [dependencies]
 pulldown-cmark = "0.8"
-regex = "1.4"
+regex = "1.5"
 structopt = { version = "0.3", optional = true }
 syn = { version = "1", features= ["extra-traits"]}
 toml = "0.5"
