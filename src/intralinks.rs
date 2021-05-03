@@ -70,7 +70,7 @@ pub enum FQIdentifierAnchor {
 }
 
 /// Fully qualified identifier.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FQIdentifier {
   pub anchor: FQIdentifierAnchor,
 
@@ -97,9 +97,7 @@ impl FQIdentifier {
     let anchor;
     let rest;
 
-    if s == "::" {
-      return Some(FQIdentifier::new(FQIdentifierAnchor::Root));
-    } else if s.starts_with("::") {
+    if s.starts_with("::") {
       anchor = FQIdentifierAnchor::Root;
       rest = &s[2..];
     } else if s == "crate" {
@@ -128,10 +126,17 @@ impl FQIdentifier {
     &self.path_shared[0..self.path_end]
   }
 
+  fn is_toplevel(&self) -> bool {
+    match self.anchor {
+      FQIdentifierAnchor::Root => self.path_end <= 1,
+      FQIdentifierAnchor::Crate => self.path_end == 0,
+    }
+  }
+
   fn parent(mut self) -> Option<FQIdentifier> {
-    match self.path_end {
-      0 => None,
-      _ => {
+    match self.is_toplevel() {
+      true => None,
+      false => {
         self.path_end -= 1;
         Some(self)
       }
@@ -139,7 +144,9 @@ impl FQIdentifier {
   }
 
   fn join(mut self, s: &str) -> FQIdentifier {
-    Rc::make_mut(&mut self.path_shared).push(s.to_string());
+    let path = Rc::make_mut(&mut self.path_shared);
+    path.truncate(self.path_end);
+    path.push(s.to_string());
     self.path_end += 1;
     self
   }
@@ -179,6 +186,12 @@ impl fmt::Display for FQIdentifier {
     }
 
     Ok(())
+  }
+}
+
+impl fmt::Debug for FQIdentifier {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+    fmt::Display::fmt(self, f)
   }
 }
 
@@ -292,11 +305,8 @@ fn symbols_type(asts: &HashMap<FQIdentifier, Vec<Item>>) -> HashMap<FQIdentifier
   let mut symbols_type: HashMap<FQIdentifier, SymbolType> = HashMap::new();
 
   for (mod_symbol, ast) in asts.iter() {
-    if *mod_symbol == FQIdentifier::new(FQIdentifierAnchor::Crate) {
-      symbols_type.insert(
-        FQIdentifier::new(FQIdentifierAnchor::Crate),
-        SymbolType::Crate,
-      );
+    if mod_symbol.is_toplevel() {
+      symbols_type.insert(mod_symbol.clone(), SymbolType::Crate);
     }
 
     for item in ast {
@@ -494,22 +504,29 @@ pub fn extract_markdown_intralink_symbols(doc: &str) -> HashSet<FQIdentifier> {
 
 fn documentation_url(symbol: &FQIdentifier, typ: SymbolType, crate_name: &str) -> String {
   let package_name = crate_name.replace("-", "_");
+  let mut path = symbol.path();
+
   let mut link = match symbol.anchor {
-    FQIdentifierAnchor::Root => format!("https://doc.rust-lang.org/stable/"),
-    FQIdentifierAnchor::Crate => format!("https://docs.rs/{}/latest/{}/", crate_name, package_name),
+    FQIdentifierAnchor::Root => {
+      let std_crate_name = &path[0];
+      path = &path[1..];
+      format!("https://doc.rust-lang.org/stable/{}/", std_crate_name)
+    }
+    FQIdentifierAnchor::Crate => {
+      format!("https://docs.rs/{}/latest/{}/", crate_name, package_name)
+    }
   };
 
   if SymbolType::Crate == typ {
     return link;
   }
 
-  for s in symbol.path().iter().rev().skip(1).rev() {
+  for s in path.iter().rev().skip(1).rev() {
     link.push_str(s);
     link.push('/');
   }
 
-  let name = symbol
-    .path()
+  let name = path
     .last()
     .expect(&format!("failed to get last component of {}", symbol));
 
@@ -651,6 +668,53 @@ fn get_standard_libraries() -> Result<Vec<Crate>, IntraLinkError> {
 mod tests {
   use super::*;
 
+  fn identifier(id: &str) -> FQIdentifier {
+    FQIdentifier::from_string(id).unwrap()
+  }
+
+  #[test]
+  fn test_identifier_is_toplevel() {
+    assert!(!identifier("crate::baz::mumble").is_toplevel());
+    assert!(!identifier("::std::baz::mumble").is_toplevel());
+    assert!(!identifier("crate::baz").is_toplevel());
+    assert!(!identifier("::std::baz").is_toplevel());
+    assert!(identifier("crate").is_toplevel());
+    assert!(identifier("::std").is_toplevel());
+  }
+
+  #[test]
+  fn test_identifier_parent() {
+    assert_eq!(
+      identifier("crate::baz::mumble").parent(),
+      Some(identifier("crate::baz"))
+    );
+    assert_eq!(
+      identifier("::std::baz::mumble").parent(),
+      Some(identifier("::std::baz"))
+    );
+    assert_eq!(identifier("crate::baz").parent(), Some(identifier("crate")));
+    assert_eq!(identifier("::std::baz").parent(), Some(identifier("::std")));
+    assert_eq!(identifier("crate").parent(), None);
+    assert_eq!(identifier("::std").parent(), None);
+  }
+
+  #[test]
+  fn test_identifier_join() {
+    assert_eq!(
+      identifier("crate::foo").join("bar"),
+      identifier("crate::foo::bar"),
+    );
+    assert_eq!(
+      identifier("::std::foo").join("bar"),
+      identifier("::std::foo::bar"),
+    );
+
+    assert_eq!(
+      identifier("::std::foo::bar").parent().unwrap().join("baz"),
+      identifier("::std::foo::baz"),
+    );
+  }
+
   #[test]
   fn test_markdown_link_iterator() {
     let markdown = "A [some text] [another](http://foo.com), [another][one]";
@@ -745,14 +809,17 @@ mod tests {
   #[test]
   fn test_all_supermodules() {
     let symbols = [
-      FQIdentifier::from_string("crate::foo::bar::baz").unwrap(),
-      FQIdentifier::from_string("crate::baz::mumble").unwrap(),
+      identifier("crate::foo::bar::baz"),
+      identifier("crate::baz::mumble"),
+      identifier("::std::vec::Vec"),
     ];
     let expected: HashSet<FQIdentifier> = [
-      FQIdentifier::from_string("crate").unwrap(),
-      FQIdentifier::from_string("crate::foo").unwrap(),
-      FQIdentifier::from_string("crate::foo::bar").unwrap(),
-      FQIdentifier::from_string("crate::baz").unwrap(),
+      identifier("crate"),
+      identifier("crate::foo"),
+      identifier("crate::foo::bar"),
+      identifier("crate::baz"),
+      identifier("::std"),
+      identifier("::std::vec"),
     ]
     .iter()
     .cloned()
@@ -764,7 +831,7 @@ mod tests {
   #[test]
   fn test_traverse_module_and_symbols_type() {
     let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
-    let module_skip: FQIdentifier = FQIdentifier::from_string("crate::skip").unwrap();
+    let module_skip: FQIdentifier = identifier("crate::skip");
 
     let source = "
         struct AStruct {}
@@ -786,7 +853,7 @@ mod tests {
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
-      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      identifier("crate"),
       &mut asts,
       &|m| *m != module_skip,
       &mut warnings,
@@ -796,34 +863,13 @@ mod tests {
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
     let expected: HashMap<FQIdentifier, SymbolType> = [
-      (
-        FQIdentifier::from_string("crate").unwrap(),
-        SymbolType::Crate,
-      ),
-      (
-        FQIdentifier::from_string("crate::AStruct").unwrap(),
-        SymbolType::Struct,
-      ),
-      (
-        FQIdentifier::from_string("crate::skip").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::a").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::a::b").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::a::b::ATrait").unwrap(),
-        SymbolType::Trait,
-      ),
-      (
-        FQIdentifier::from_string("crate::a::FooStruct").unwrap(),
-        SymbolType::Struct,
-      ),
+      (identifier("crate"), SymbolType::Crate),
+      (identifier("crate::AStruct"), SymbolType::Struct),
+      (identifier("crate::skip"), SymbolType::Mod),
+      (identifier("crate::a"), SymbolType::Mod),
+      (identifier("crate::a::b"), SymbolType::Mod),
+      (identifier("crate::a::b::ATrait"), SymbolType::Trait),
+      (identifier("crate::a::FooStruct"), SymbolType::Struct),
     ]
     .iter()
     .cloned()
@@ -862,7 +908,7 @@ mod tests {
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
-      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      identifier("crate"),
       &mut asts,
       &|_| true,
       &mut warnings,
@@ -872,26 +918,11 @@ mod tests {
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
     let expected: HashMap<FQIdentifier, SymbolType> = [
-      (
-        FQIdentifier::from_string("crate").unwrap(),
-        SymbolType::Crate,
-      ),
-      (
-        FQIdentifier::from_string("crate::a").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
-        SymbolType::Struct,
-      ),
-      (
-        FQIdentifier::from_string("crate::b").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::b::MyStruct").unwrap(),
-        SymbolType::Struct,
-      ),
+      (identifier("crate"), SymbolType::Crate),
+      (identifier("crate::a"), SymbolType::Mod),
+      (identifier("crate::a::MyStruct"), SymbolType::Struct),
+      (identifier("crate::b"), SymbolType::Mod),
+      (identifier("crate::b::MyStruct"), SymbolType::Struct),
     ]
     .iter()
     .cloned()
@@ -920,7 +951,7 @@ mod tests {
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
-      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      identifier("crate"),
       &mut asts,
       &|_| true,
       &mut warnings,
@@ -930,18 +961,9 @@ mod tests {
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = symbols_type(&asts);
     let expected: HashMap<FQIdentifier, SymbolType> = [
-      (
-        FQIdentifier::from_string("crate").unwrap(),
-        SymbolType::Crate,
-      ),
-      (
-        FQIdentifier::from_string("crate::a").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::a::MyStruct").unwrap(),
-        SymbolType::Struct,
-      ),
+      (identifier("crate"), SymbolType::Crate),
+      (identifier("crate::a"), SymbolType::Mod),
+      (identifier("crate::a::MyStruct"), SymbolType::Struct),
     ]
     .iter()
     .cloned()
@@ -952,10 +974,7 @@ mod tests {
 
   #[test]
   fn test_traverse_module_expore_lazily() {
-    let symbols: HashSet<FQIdentifier> = [FQIdentifier::from_string("crate::module").unwrap()]
-      .iter()
-      .cloned()
-      .collect();
+    let symbols: HashSet<FQIdentifier> = [identifier("crate::module")].iter().cloned().collect();
     let modules = all_supermodules(symbols.iter());
 
     let mut asts: HashMap<FQIdentifier, Vec<Item>> = HashMap::new();
@@ -970,7 +989,7 @@ mod tests {
     traverse_module(
       &syn::parse_file(&source).unwrap().items,
       &PathBuf::new(),
-      FQIdentifier::new(FQIdentifierAnchor::Crate),
+      identifier("crate"),
       &mut asts,
       &|module| modules.contains(module),
       &mut warnings,
@@ -981,42 +1000,40 @@ mod tests {
     let symbols_type: HashSet<FQIdentifier> = symbols_type(&asts).keys().cloned().collect();
 
     // We should still get `crate::module`, but nothing inside it.
-    let expected: HashSet<FQIdentifier> = [
-      FQIdentifier::from_string("crate").unwrap(),
-      FQIdentifier::from_string("crate::module").unwrap(),
-    ]
-    .iter()
-    .cloned()
-    .collect();
+    let expected: HashSet<FQIdentifier> = [identifier("crate"), identifier("crate::module")]
+      .iter()
+      .cloned()
+      .collect();
 
     assert_eq!(symbols_type, expected);
   }
 
   #[test]
   fn test_documentation_url() {
-    let link = documentation_url(
-      &FQIdentifier::from_string("crate").unwrap(),
-      SymbolType::Crate,
-      "foobini",
-    );
+    let link = documentation_url(&identifier("crate"), SymbolType::Crate, "foobini");
     assert_eq!(link, "https://docs.rs/foobini/latest/foobini/");
 
-    let link = documentation_url(
-      &FQIdentifier::from_string("crate::AStruct").unwrap(),
-      SymbolType::Struct,
-      "foobini",
-    );
+    let link = documentation_url(&identifier("crate::AStruct"), SymbolType::Struct, "foobini");
     assert_eq!(
       link,
       "https://docs.rs/foobini/latest/foobini/struct.AStruct.html"
     );
 
+    let link = documentation_url(&identifier("crate::amodule"), SymbolType::Mod, "foobini");
+    assert_eq!(link, "https://docs.rs/foobini/latest/foobini/amodule/");
+
+    let link = documentation_url(&identifier("::std"), SymbolType::Crate, "foobini");
+    assert_eq!(link, "https://doc.rust-lang.org/stable/std/");
+
     let link = documentation_url(
-      &FQIdentifier::from_string("crate::amodule").unwrap(),
-      SymbolType::Mod,
+      &identifier("::std::collections::HashMap"),
+      SymbolType::Struct,
       "foobini",
     );
-    assert_eq!(link, "https://docs.rs/foobini/latest/foobini/amodule/");
+    assert_eq!(
+      link,
+      "https://doc.rust-lang.org/stable/std/collections/struct.HashMap.html"
+    );
 
     let link = documentation_url(
       &FQIdentifier::from_string("crate::amodule").unwrap(),
@@ -1044,11 +1061,11 @@ Also check [this](::std::sync::Arc) and [this](::alloc::sync::Arc).
     let symbols = extract_markdown_intralink_symbols(doc);
 
     let expected: HashSet<FQIdentifier> = [
-      FQIdentifier::from_string("crate").unwrap(),
-      FQIdentifier::from_string("crate::amodule").unwrap(),
-      FQIdentifier::from_string("crate::foo").unwrap(),
-      FQIdentifier::from_string("::std::sync::Arc").unwrap(),
-      FQIdentifier::from_string("::alloc::sync::Arc").unwrap(),
+      identifier("crate"),
+      identifier("crate::amodule"),
+      identifier("crate::foo"),
+      identifier("::std::sync::Arc"),
+      identifier("::alloc::sync::Arc"),
     ]
     .iter()
     .cloned()
@@ -1073,22 +1090,10 @@ Go ahead and check all the [structs in foo](crate::foo#structs) specifically
 ";
 
     let symbols_type: HashMap<FQIdentifier, SymbolType> = [
-      (
-        FQIdentifier::from_string("crate").unwrap(),
-        SymbolType::Crate,
-      ),
-      (
-        FQIdentifier::from_string("crate::amodule").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::foo").unwrap(),
-        SymbolType::Mod,
-      ),
-      (
-        FQIdentifier::from_string("crate::foo::BestStruct").unwrap(),
-        SymbolType::Struct,
-      ),
+      (identifier("crate"), SymbolType::Crate),
+      (identifier("crate::amodule"), SymbolType::Mod),
+      (identifier("crate::foo"), SymbolType::Mod),
+      (identifier("crate::foo::BestStruct"), SymbolType::Struct),
     ]
     .iter()
     .cloned()
