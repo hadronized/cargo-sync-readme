@@ -11,6 +11,12 @@ documentation from your `lib.rs` or `main.rs` with a place in your *readme* file
 so, this command will parse your inner documentation (i.e. `//!`) on `lib.rs` or `main.rs` and
 will output it in your *readme* file at specific markers.
 
+## Installation
+
+```bash
+cargo install cargo-sync-readme
+```
+
 ## The markers
 
 Because you might want a specific *readme* file that adds some more information to the
