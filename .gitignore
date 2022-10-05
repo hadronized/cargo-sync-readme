@@ -1,5 +1,7 @@
-/target
+.direnv
 **/*.rs.bk
+/target
 /tests/*/Cargo.lock
-/tests/*/target
 /tests/*/README.md
+/tests/*/target
+result
